@@ -119,6 +119,7 @@ class WhisperTranscriber:
             self.active_recording = None
 
     async def transcript_to_paste(self):
+        # I now have Whisper Typing, so I don't need this anymore
         while True:
             print("Transcripting to paste")
             await asyncio.sleep(0.1)
