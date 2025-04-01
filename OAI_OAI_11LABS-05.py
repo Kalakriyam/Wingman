@@ -600,38 +600,50 @@ Ik heb afwasmiddel op je boodschappenlijst gezet.
 """))
     
     @tasks_agent_instance.tool
-    def read_file(ctx: RunContext[str], file_path: str) -> str:
+    async def read_file(ctx: RunContext[str], file_path: str) -> str: # Make the tool async
         """Reads the content of a .md or .txt file."""
         allowed_files = ["boodschappen.md", "dagtaken.md", "werktaken.md", "our_scratchpad.md"]
         if file_path not in allowed_files:
             return f"Error: Access denied. You can only access {', '.join(allowed_files)}."
+
+        # Use os.path.exists (still sync, but very fast) or try/except below
         if not os.path.exists(file_path):
-            # Create the file if it doesn't exist to avoid read errors on first use
-            with open(file_path, 'w', encoding='utf-8') as file:
-                file.write("") # Create empty file
-            return "" # Return empty string for a new file
-            # return f"Error: File {file_path} does not exist." # Old behavior
-        if not file_path.endswith(('.md', '.txt')):
-            # This check might be redundant if using allowed_files
-            return f"Error: Unsupported file type. Only .txt and .md are allowed."
+            try:
+                async with aiofiles.open(file_path, 'w', encoding='utf-8') as file:
+                    await file.write("") # Create empty file asynchronously
+                return "" # Return empty string for a new file
+            except Exception as e:
+                return f"Error creating file {file_path}: {e}" # Handle creation error
+
+        # Redundant check removed as allowed_files handles it
+        # if not file_path.endswith(('.md', '.txt')):
+        #     return f"Error: Unsupported file type. Only .txt and .md are allowed."
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                return file.read()
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as file:
+                # Read the file asynchronously
+                return await file.read()
+        except FileNotFoundError:
+            # Should ideally be caught by os.path.exists, but good failsafe
+            return f"Error: File {file_path} does not exist (async read)."
         except Exception as e:
             return f"Error reading file {file_path}: {e}"
 
     @tasks_agent_instance.tool
-    def write_file(ctx: RunContext[str], file_path: str, content: str) -> str:
+    async def write_file(ctx: RunContext[str], file_path: str, content: str) -> str: # Make the tool async
         """Writes content to a .md or .txt file."""
         allowed_files = ["boodschappen.md", "dagtaken.md", "werktaken.md", "our_scratchpad.md"]
         if file_path not in allowed_files:
             return f"Error: Access denied. You can only access {', '.join(allowed_files)}."
-        if not file_path.endswith(('.md', '.txt')):
-            # This check might be redundant if using allowed_files
-            return f"Error: Unsupported file type. Only .txt and .md are allowed."
+
+        # Redundant check removed
+        # if not file_path.endswith(('.md', '.txt')):
+        #     return f"Error: Unsupported file type. Only .txt and .md are allowed."
+
         try:
-            with open(file_path, 'w', encoding='utf-8') as file:
-                file.write(content)
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as file:
+                # Write the file asynchronously
+                await file.write(content)
             return f"Content successfully written to {file_path}."
         except Exception as e:
             return f"Error writing to file {file_path}: {e}"
@@ -671,8 +683,7 @@ Ik heb afwasmiddel op je boodschappenlijst gezet.
             await text_chunk_queue.put({"type": "finalize"})
             logging.debug("TASKS_AGENT: Sent finalize signal to text queue.")
 
-            # Wait for the consumer to acknowledge finalization
-            await text_chunk_queue.put({"type": "finalize"})    
+            # Wait for the consumer to acknowledge finalization   
             await text_finalized.wait()
             text_finalized.clear()
             logging.debug("TASKS_AGENT: Text queue consumer finalized.")
