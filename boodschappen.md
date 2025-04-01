@@ -1,4 +1,3 @@
-- [ ] nagellak
 - [ ] brood
 - [ ] bier
 - [ ] koffie
