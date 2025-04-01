@@ -1,0 +1,6 @@
+- [ ] nagellak
+- [ ] brood
+- [ ] bier
+- [ ] koffie
+- [ ] melk
+- [ ] thee

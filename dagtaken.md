@@ -1,0 +1,5 @@
+- [x] RGS herregistratie aanvragen
+- [x] Brahim bellen
+- [x] naar de kapper
+- [ ] Rentokil bellen
+- [ ] PDF agent maken

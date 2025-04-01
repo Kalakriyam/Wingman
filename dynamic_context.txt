@@ -1,0 +1,385 @@
+# **CONTEXT:**
+
+## Datum en tijd:
+{local_date}
+{local_time}
+
+
+## Doel van de huidige conversatie:
+{summary}
+
+
+## Huidige focus:
+{current_focus}
+
+
+---
+
+## Stappenplan verbeteren van de code:
+We zijn ergens in de volgende lijst, waar nog niet 'GEDAAN' voor staat:
+
+1. GEDAAN: simpel 'refresh' bericht kunnen sturen vanuit obsidian naar een nieuw endpoint in het conversatiescript, zodat het conversatiescript de system prompt en/of dynamische context gaat verversen.
+2. GEDAAN: Het VoiceUI script uitbreiden zodat ik een summary kan invoeren, en sturen naar het conversatiescript. Hiermee leer ik hoe de communicatie tussen de scripts verloopt, wat nodig is voor latere aanpassingen. Ik moet een klasse maken voor deze communicatie, liefst wat 'universeel', waarschijnlijk een nieuw endpoint, en de communication manager uitbreiden met een 'self variabele' voor de summary als dat er nog niet is, en een methode waarmee de save conversation functie (of een andere functie) de summary kan ophalen en gebruiken. 
+    BEREIKT: bonus: het kunnen bewerken van de 'summary' tijdens de conversatie
+3. GEDAAN: **BELANGRIJKSTE UITBREIDING:** Ook *tijdens* het voeren van de conversatie de conversatie kunnen bewerken - dus niet meer alleen via opgeslagen JSON bestanden maar 'live' via de communication manager een kopie van de huidige messages lijst ophalen, deze bewerken, en daarna de communication manager de huidige versie laten vervangen door de bewerkte versie.
+4. GEDAAN: **Een file agent maken:**
+- Een AI-agent ontwikkelen die bestanden kan lezen, schrijven, en bewerken.
+- Deze agent moet bijvoorbeeld de agenda van morgen of bepaalde taken kunnen bewerken en deze als dynamische context en placeholders kunnen verwerken.
+- Het doel is om sneller te werken dan via N8N workflows, door direct met bestanden te communiceren.
+- Functionaliteiten:
+  - Bestanden ophalen en inlezen.
+  - Gewijzigde bestanden opslaan.
+
+  - (eventueel later) Bonus: 
+    - Mogelijkheid om bestanden te taggen of te categoriseren voor betere organisatie.
+    - Specifieke secties in bestanden aanpassen (bijvoorbeeld placeholders of dynamische context).
+5. berichten kunnen maken en sturen naar het conversatiescript en andere agents/crews. Berichten kunnen sturen naar agents en andere crews voor het verversen van hun prompts en dynamische context. `agenda-crew: 'ververs systemprompt'`, of: '`Obsidian-crew: Userproxy: 'Volgend rapport mag minder gedetailleerd.'`, of zoiets.
+6. Uitbreiden met een functie om opgeslagen conversaties te kunnen openen en bewerken. De tekstverwerker is al gemaakt bij punt 3. 
+7. uitbreiden van Voice UI zodat ik placeholders in de dynamische context kan bewerken, zoals 'dit ben ik nu aan het doen', en 'dit is relevante code'. Ik moet handmatig in de voice UI kunnen invoeren wat ik nu aan het doen ben, terwijl 'dit is de relevante code' uit een ander bestand gehaald moet worden. NB dat bestand moet later bijgehouden worden door de code crew. Als extra (voor het geval het heel makkelijk gaat) kan ik het script uitbreiden met een eenvoudige tekstverwerker voor het kunnen bewerken van de system prompt en/of dynamische context (filenames staan in het ConversationState object) - manier vinden om het bestand van de server op te halen en weer terug te sturen (via http)
+    - dus de placeholders houd ik bij in het voice UI script.
+    - elke keer als ik een push doe, moeten ook de placeholders vervangen worden. Hoe doe ik dat dan aangezien de huidige system prompt en dynamische context alleen als bestandsnaam worden doorgegeven? Extra velden maken voor de placeholders en het conversatiescript ze te laten vervangen?
+    - ik was al op zoek naar 'permanente placeholders' vanwege het punt hierboven; eenmaal ingevuld kan ik het op dit moment niet nog een keer doen. Maar misschien bestaat hier wel logica voor. 
+        - **BONUS**: ook het conversation state object kunnen ophalen en bewerken, bijvoorbeeld tags toevoegen of wijzigen
+8. ook *tijdens* het voeren van de conversatie de system prompt en/of dynamische context kunnen bewerken. Dus niet meer alleen via het pushen van bestandsnamen, maar ook 'live'. (In een latere stap (welke?) kunnen 'doorlinken' van het object naar de feitelijke opgeslagen JSON conversatie, prompt, of dynamische context, en deze bewerken?)
+9. Overstappen op een database voor events in plaats van allemaal losse .txt en .JSON bestanden. Ik heb nu al zoveel conversation states, idee-events en journal-events dat het niet meer overzichtelijk is. bonus: alle velden van het conversation state object kunnen opslaan, lezen en gebruiken.
+9. alle events kunnen bewerken, begin maken met inter-crew-communicatie (ik kan me voorstellen dat verschillende crews een verzoek moeten kunnen doen aan een 'deep research crew'),getimede berichten en triggers, een RAG oplossing, en daarna  'recepten' voor multicrew workflows (Een recept net zoiets als LangGraph maar waarbij elke node niet alleen een agent is zoals nu, maar ook een **hele agentic workflow** kan zijn).
+ 
+
+# **RELEVANT CODE SNIPPETS FROM THE AI PROJECT:**
+
+
+'''python
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Pas dit aan naar jouw behoeften
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class NoteData(BaseModel):
+    title: str
+    content: str
+
+class DefaultPrompts(BaseModel):
+    system_prompt: str = Field(default="system_prompt.txt")
+    dynamic_context: str = Field(default="dynamic_context.txt")
+
+class ConversationState(BaseModel):
+    system_prompt_file: str = Field(default="system_prompt.txt")
+    dynamic_context_file: str = Field(default="dynamic_context.txt")
+    messages_list_file: str
+    summary: str = Field(default="")
+    timestamp: str
+    tags: list = Field(default_factory=list)
+    links: list = Field(default_factory=list)
+
+class VoiceUpdateRequest(BaseModel):
+    voice_id: str
+    voice_name: str
+
+class MessageType(Enum):
+    EXCHANGE = "exchange"
+    TRIGGER = "trigger"
+    ACTION_REQUEST = "action_request"
+    TOOL_CALL = "tool_call"
+    STATUS_UPDATE = "status_update"
+
+class TriggerType(Enum):
+    REFRESH_ALL_PROMPTS = "refresh_all_prompts"
+    CLEAR_CONTEXT = "clear_context"
+    RESTART_AGENT = "restart_agent"
+    PULL_CONVERSATION = "pull_conversation"
+    PULL_SUMMARY = "pull_summary"
+    # Andere directe triggers zonder payload
+
+class ActionType(Enum):
+    REFRESH_SPECIFIC_PROMPT = "refresh_specific_prompt"
+    UPDATE_PLACEHOLDERS = "update_placeholders"
+    PUSH_SUMMARY = "push_summary"
+    PUSH_CONVERSATION = "push_conversation"
+    CHANGE_VOICE = "change_voice"
+    # Complexere acties met payload
+
+class Message(BaseModel):
+    sender: str
+    recipient: str
+    message_type: MessageType
+    trigger_type: Optional[TriggerType]
+    action_type: Optional[ActionType]
+    payload: Optional[dict[str, Any]]
+    # timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+@app.post('/update')
+async def update_content(note: NoteData):
+    if note.title and note.content:
+        communication_manager.update_obsidian_content(note.title, note.content)
+        # return {"message": f"{note.title} succesvol ontvangen"}
+        print (f"'{note.title}' succesvol ontvangen")
+    
+    else:
+        raise HTTPException(status_code=400, detail="Titel of inhoud ontbreekt")
+
+# @app.post('/message')
+# async def handle_message(message: Message):
+#     if message.action_type == ActionType.PUSH_SUMMARY:
+#         return communication_manager.handle_message(message)
+#     elif message.trigger_type == TriggerType.PULL_CONVERSATION:
+#         return communication_manager.handle_message(message)
+#     elif message.trigger_type == TriggerType.PULL_SUMMARY:
+#         return communication_manager.handle_message(message)
+#     elif message.action_type == ActionType.PUSH_CONVERSATION:
+#         return communication_manager.handle_message(message)
+
+@app.post('/message')
+async def handle_message(message: Message):
+    if message.action_type:
+        return communication_manager.handle_action(message)
+    elif message.trigger_type:
+        return communication_manager.handle_trigger(message)
+    
+
+@app.post('/update_voice')
+async def update_voice(request: VoiceUpdateRequest):
+    update_voice_id(request.voice_id, request.voice_name)
+    await generate_model_audio_segments()
+    return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
+
+@app.post('/reload_default_prompts')
+async def reload_default_prompts(refresh: DefaultPrompts):
+    if refresh.system_prompt and refresh.dynamic_context:
+        await prompt_manager.reload_default_prompts(refresh.system_prompt, refresh.dynamic_context)
+        print ("Verzoek tot reload succesvol ontvangen")
+        return {"message": "Verzoek tot reload succesvol ontvangen"}
+        
+    else:
+        raise HTTPException(status_code=400, detail="Bericht incompleet")
+
+
+class CommunicationManager:
+    def __init__(self):
+        self.messages: list[dict[str, str]] = []
+        self.obsidian_content: str = ""
+        self.obsidian_title: str = ""
+        self.midi_details: str = ""
+        self._lock = threading.Lock()
+        self.summary: str = ""
+
+    def handle_action(self, message: Message) -> None:
+        """Handles incoming messages based on their type and action."""
+
+        # Check for the specific action type for updating the summary
+        if message.action_type == ActionType.PUSH_SUMMARY: # Use the actual Enum member name
+            with self._lock:
+                # FIRST: Check if the payload dictionary exists
+                if message.payload:
+                    # SECOND: Safely get the 'text' value from the payload
+                    # The .get("text", "") handles cases where 'text' might be missing
+                    new_summary = message.payload.get("text", "")
+                    self.summary = new_summary # Update the instance's summary attribute
+                    print(f"CommunicationManager: Summary updated to: '{self.summary}'") # Optional: Confirmation log
+                    return("summary updated")
+                else:
+                    # Handle the case where payload is None for an update_summary action
+                    # You might want to log this as a warning or error
+                    
+                    print("CommunicationManager: Warning - Received UPDATE_SUMMARY action but payload was missing.")
+                    # Decide if you want to clear the summary or leave it as is
+                    # self.summary = "" # Optionally clear if payload is missing
+                    return("warning - payload was missing")
+
+        if message.action_type == ActionType.PUSH_CONVERSATION:
+            with self._lock:
+                # FIRST: Check if the payload dictionary exists
+                if message.payload:
+                    # SECOND: Safely get the 'text' value from the payload
+                    # The .get("text", "") handles cases where 'text' might be missing
+                    new_conversation = message.payload.get("conversation", [])
+                    self.messages = new_conversation # Update the instance's messages attribute
+                    # print(f"CommunicationManager: Conversation updated to: {self.messages}")
+                    print(f"CommunicationManager: Conversation updated ;-)")
+                    return("conversation updated")
+                else:
+                    print("CommunicationManager: Warning - Received UPDATE_CONVERSATION action but payload was missing.")
+                    return("warning - payload was missing")
+    
+    def handle_trigger(self, message: Message) -> None:
+        if message.trigger_type == TriggerType.PULL_CONVERSATION:
+            with self._lock:
+                return self.messages
+            
+        if message.trigger_type == TriggerType.PULL_SUMMARY:
+            with self._lock:
+                return self.summary
+            
+    def get_summary(self):
+        with self._lock:
+            return self.summary
+        
+    def load_summary(self, summary: str) -> None:
+        with self._lock:
+            self.summary = summary
+            
+    def add_user_message(self, user_input: str) -> None:
+        with self._lock:
+            self.messages.append({"role": "user", "content": user_input})
+
+    def add_assistant_message(self, assistant_output: str) -> None:
+        with self._lock:
+            self.messages.append({"role": "assistant", "content": assistant_output})
+
+    def get_messages(self) -> list[dict[str, str]]:     
+        with self._lock:
+            return list(self.messages)
+
+    def set_messages(self, new_messages: list[dict[str, str]]) -> None:
+        with self._lock:
+            self.messages = new_messages
+
+    def update_obsidian_content(self, title: str, content: str) -> None:
+        """Update the Obsidian note content."""
+        with self._lock:
+            self.obsidian_title = title
+            self.obsidian_content = content
+            note_received.set()
+
+    def update_midi_details(self, midi_details: str) -> None:
+        """Update the MIDI details."""
+        with self._lock:
+            self.midi_details = midi_details
+
+    def process_incoming_message(self) -> None:
+        """Process additional context (Obsidian notes, MIDI details) and append to the last message."""
+        with self._lock:
+            # Append Obsidian note if available
+            if self.obsidian_content:
+                last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
+                if last_message:
+                    last_message['content'] += f"\n\n(Obsidian Note: {self.obsidian_title})\n{self.obsidian_content}"
+                self.obsidian_content = ""
+                self.obsidian_title = ""
+                print(f"Obsidian note added to last message: {self.obsidian_title}")
+
+            # Append MIDI details if available
+            if self.midi_details:
+                last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
+                if last_message:
+                    last_message['content'] += f"\n\nMIDI Details:\n{self.midi_details}"
+                self.midi_details = ""
+                print(f"MIDI details added to last message: {self.midi_details}")
+
+class PromptManager:
+    def __init__(self):
+        self.system_prompt = ""
+        self.dynamic_context = []
+
+    async def load_default_prompts(self):
+        self.system_prompt = await get_system_prompt("system_prompt.txt")
+        self.dynamic_context = await get_dynamic_context("dynamic_context.txt")
+
+    async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str):
+        self.system_prompt = await get_system_prompt(f"{new_system_prompt}")
+        self.dynamic_context = await get_dynamic_context(f"{new_dynamic_context}")
+
+    async def get_system_prompt(self):
+        return self.system_prompt
+
+    async def get_dynamic_context(self):
+        return self.dynamic_context
+    
+async def main():
+    
+    print("🔹 Press Scroll Lock to record your message as audio.")
+    print("🔹 Press Ctrl+Shift+O to save the conversation state.")
+    # print("🔹 Press Ctrl+Shift+I to save the latest user message as an idea event.")
+    print("🔹 Press Ctrl+Shift+R to reload the latest conversation state.")
+
+    os.system("cls")
+
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+    global system_prompt
+    global dynamic_context
+    
+    
+    # Start de taak bij het opstarten
+    asyncio.create_task(generate_model_audio_segments())
+
+    # have to make one prompt fetcher for all prompts
+
+    system_prompt = await prompt_manager.get_system_prompt()
+    dynamic_context = await prompt_manager.get_dynamic_context()
+    
+    await initialize()
+
+    try:
+        while not shutdown_event.is_set() and not priority_input_event.is_set():
+            user_input = await whisper_transcriber.start()
+            communication_manager.add_user_message(user_input)
+            if note_received.is_set():
+                communication_manager.process_incoming_message()
+
+            print("\n>>>>>>  Thinking...  <<<<<<", end='')
+            response_text = await chat_with_llm(client, communication_manager.get_messages())
+            communication_manager.add_assistant_message(response_text)
+
+    finally:
+        logging.warning("Shutdown complete.")
+        sys.exit(0)
+
+async def start_uvicorn():
+    config = uvicorn.Config(app, host="127.0.0.1", port=5001, log_level="error")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+
+if __name__ == "__main__":
+    winloop.install()
+    whisper_transcriber = WhisperTranscriber()
+    whisper_transcriber.setup_key_handlers()  # Set up all key handlers once
+    communication_manager = CommunicationManager()
+    prompt_manager = PromptManager()
+    
+    async def run_all():
+        global global_http_session
+        global_http_session = aiohttp.ClientSession()
+        # Set up signal handler at the top level
+        # signal.signal(signal.SIGINT, save_conversation)
+        load_default_prompts_task = await asyncio.create_task(prompt_manager.load_default_prompts())
+        main_task = asyncio.create_task(main())
+        
+
+        server = asyncio.create_task(start_uvicorn())
+        playback_task = asyncio.create_task(manage_audio_playback())
+        # gui_task = asyncio.create_task(gui_loop())
+        first_compound_action_task = asyncio.create_task(first_compound_action())
+        obsidian_agent_task = asyncio.create_task(obsidian_agent())
+        save_idea_event_task = asyncio.create_task(save_idea_event())
+        save_journal_event_task = asyncio.create_task(save_journal_event())
+        text_consumer_task = asyncio.create_task(text_processor())
+        tool_consumer_task = asyncio.create_task(tool_processor())
+        
+        # Wait for shutdown_event to be set (by save_conversation)
+        await shutdown_event.wait()
+        
+        # Once shutdown_event is set, cancel all tasks
+        server.cancel()
+        playback_task.cancel()
+        # gui_task.cancel()
+        first_compound_action_task.cancel()
+        obsidian_agent_task.cancel()
+        save_idea_event_task.cancel()
+        save_journal_event_task.cancel()
+        main_task.cancel()
+        text_consumer_task.cancel()
+        tool_consumer_task.cancel()
+
+        await global_http_session.close()        
+        # Wait for cancellation to complete
+        await asyncio.gather(load_default_prompts_task, server, playback_task, obsidian_agent_task, first_compound_action_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
+        sys.exit(0)
+
+    asyncio.run(run_all())
