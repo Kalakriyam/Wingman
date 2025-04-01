@@ -1,0 +1,9 @@
+{
+  "system_prompt_file": "system_prompt.txt",
+  "dynamic_context_file": "dynamic_context.txt",
+  "messages_list_file": "chat_20250401210610.json",
+  "summary": "toewerken naar manage_audio_playback functie zonder polling.",
+  "timestamp": "20250401210610",
+  "tags": [],
+  "links": []
+}
