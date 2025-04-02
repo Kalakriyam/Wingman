@@ -1,3 +1,4 @@
+- [ ] Vogelvoer bestellen
 - [ ] reiskoffer Eastpack bestellen
 - [ ] pdf-agent maken
-- [ ] handdoeken en ondergoed wassen
+- [ ] koelkast bovenste plank schoonmaken

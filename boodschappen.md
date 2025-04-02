@@ -3,3 +3,5 @@
 - [ ] pizza
 - [ ] veganistisch vlees
 - [ ] vochtig toiletpapier
+- [ ] sinaasappelsap
+- [ ] koffie

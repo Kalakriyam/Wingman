@@ -1,0 +1,7 @@
+{
+  "event_id": "20250402113215",
+  "type": "idea",
+  "source": {
+    "content": " Het zou mooi zijn als het me lukt om de agent in het conversatiescript, bijvoorbeeld de Pidentic Agent, in een loop te zetten waar hij zelf uit kan breken. Als ik zeg tot ziens, dan moet hij een bepaald soort gestructureerde output geven waardoor de coroutine waar die agent in zit uit die while true loop breekt en een nieuwe message history aanmaakt."
+  }
+}
