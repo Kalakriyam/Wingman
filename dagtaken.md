@@ -1,5 +1,3 @@
-- [x] RGS herregistratie aanvragen
-- [x] Brahim bellen
-- [x] naar de kapper
-- [ ] Rentokil bellen
-- [ ] PDF agent maken
+- [ ] reiskoffer Eastpack bestellen
+- [ ] pdf-agent maken
+- [ ] handdoeken en ondergoed wassen

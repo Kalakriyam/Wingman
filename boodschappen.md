@@ -1,1 +1,5 @@
-- [ ] spruitjes
+- [ ] smeerkaas
+- [x] Pieter
+- [ ] pizza
+- [ ] veganistisch vlees
+- [ ] vochtig toiletpapier

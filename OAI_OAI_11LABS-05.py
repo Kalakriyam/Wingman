@@ -36,6 +36,7 @@ from openai import AsyncOpenAI
 from whisper import WhisperTranscriber
 from elevenlabs.client import AsyncElevenLabs
 from cerebras.cloud.sdk import AsyncCerebras
+from filelock import AsyncFileLock
 from collections import defaultdict
 from typing import Optional, Any
 from enum import Enum
@@ -82,7 +83,7 @@ request_start_time = 0
 tts_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 audio_ready_event = asyncio.Event()
 segment_ready_events = defaultdict(lambda: None)
-tts_semaphore = asyncio.Semaphore(19)
+tts_semaphore = asyncio.Semaphore(18)
 audio_segments = defaultdict(lambda: None)
 numbered_sentences = defaultdict(lambda: None)
 midi_commands = defaultdict(lambda: None)
@@ -561,15 +562,47 @@ async def tasks_agent():
         'google-gla:gemini-2.0-flash', # Use your desired model
         system_prompt=("""
 # general instructions:
-You're an assistant for tasks and groceries.
-You can Use the provided tools to read what's in the files, add or delete items, and write to the files.
-The files you have access to are boodschappen.md, dagtaken.md, werktaken.md, and our_scratchpad.md.
-                       
-The groceries are stored in boodschappen.md.
-The daily tasks are stored in dagtaken.md.
-Work related tasks are stored in werktaken.md.
-The file our_scratchpad.md - your 'kladblok' - is where you and Alexander can write down and exchange ideas, thoughts, questions, etc.
+- You are Bülent, Alexander's AI assistant for tasks, groceries, and brainstorming.
+- Your job is to read the lists in the files, add items to the files, mark items and tasks as done, and work with the scratchpad.
+- Always work step by step as instructed.
 
+Tasks and items are stored in markdown tasks format:
+- [ ] clean the sink
+- [x] write a blogpost   
+                                           
+The files you have access to are: 
+boodschappen.md (groceries list)
+dagtaken.md (for general, daily tasks)
+werktaken.md (for work related tasks)
+our_scratchpad.md (for brainstorming and collaboration)
+                     
+# list instructions: 
+## Adding items to the list:
+1) Alexander will say something like 'zet pizza op mijn boodschappenlijst'
+2) You will read the file to see if the item is already in the list
+3) if it is, tell Alexander that the item is already in the list
+4) if it is not, write **a new line** with the item to the list
+5) read the file again to verify your changes
+6) if your change didn't work, write the line again
+
+## Modifying items in the list:
+1) Alexander will say something like 'verander pietsa in pizza op mijn boodschappenlijst'
+2) You will read the file to see if the item ('pietsa') is in the list
+3) if it is, write the list again, with the modified item ('pizza')
+4) read the file again to verify your changes
+5) if your change didn't work, write the updated list to the fileagain
+
+## Marking items as done:
+1) Alexander will say something like 'ik heb het bureau opgeruimd'
+2) You will read the daily tasks file to see if the item ('bureau opruimen')  in the list
+3) If it's not in the daily tasks file, read the work tasks file
+4) write the list to the file you found it in, with the item marked as done (use [x])
+5) read the file again to verify your changes
+6) if your change didn't work, write the updated list to the file again 
+
+The file our_scratchpad.md - your 'kladblok' - is where you and Alexander can write down and exchange ideas, thoughts, questions, etc.
+Double check the file after you've written to it, to verify your changes.
+                       
 # correct evident text errors:
 like 'glued together' words:
 'huisartsbellenmedicatie' > 'huisarts bellen medicatie'
@@ -582,11 +615,12 @@ or nonexistent words:
 # format of the tasks and items in the files:                   
 The tasks and items are stored in markdown tasks format:
 - [ ] clean the sink
+- [x] write a blogpost
 - [ ] trim beard
 * But you will answer in simple lists without the markdown formatting.
-* Unless explicitly asked, leave out completed tasks.
+* Unless explicitly asked, **don't** mention completed tasks in your answers.
                                           
-# answer formatting:
+# formatting tasks and items in your answers:
 Format your answers like this:
 
 Op je boodschappenlijst staat:
@@ -596,7 +630,11 @@ Op je boodschappenlijst staat:
 Je hebt nog maar één dagtaak over:
 - kleding kopen
 
-Ik heb afwasmiddel op je boodschappenlijst gezet.                   
+Ik heb afwasmiddel op je boodschappenlijst gezet. 
+
+# using the scratchpad:
+No special formatting required in the file or your answers.
+Use the scratchpad to collaborate, write down and exchange ideas, thoughts, questions, etc.                  
 """))
     
     @tasks_agent_instance.tool
@@ -632,18 +670,17 @@ Ik heb afwasmiddel op je boodschappenlijst gezet.
     @tasks_agent_instance.tool
     async def write_file(ctx: RunContext[str], file_path: str, content: str) -> str: # Make the tool async
         """Writes content to a .md or .txt file."""
+        lock = AsyncFileLock(f"{file_path}.lock")
+
         allowed_files = ["boodschappen.md", "dagtaken.md", "werktaken.md", "our_scratchpad.md"]
         if file_path not in allowed_files:
             return f"Error: Access denied. You can only access {', '.join(allowed_files)}."
 
-        # Redundant check removed
-        # if not file_path.endswith(('.md', '.txt')):
-        #     return f"Error: Unsupported file type. Only .txt and .md are allowed."
-
         try:
-            async with aiofiles.open(file_path, 'w', encoding='utf-8') as file:
-                # Write the file asynchronously
-                await file.write(content)
+            async with lock:
+                async with aiofiles.open(file_path, 'w', encoding='utf-8') as file:
+                    # Write the file asynchronously
+                    await file.write(content)
             return f"Content successfully written to {file_path}."
         except Exception as e:
             return f"Error writing to file {file_path}: {e}"
@@ -1838,7 +1875,7 @@ async def manage_audio_playback():
             
             audio_order += 1
 
-        await asyncio.sleep(0.04)
+        await asyncio.sleep(0.8)
 
 async def process_midi_as_audio(midi_command, order):
     # Create a special marker in audio_segments to maintain ordering
