@@ -270,6 +270,7 @@ class CommunicationManager:
                 self.midi_details = ""
                 print(f"MIDI details added to last message: {self.midi_details}")
 
+
 class PromptManager:
     def __init__(self):
         self.system_prompt = ""
@@ -283,6 +284,12 @@ class PromptManager:
         self.system_prompt = await get_system_prompt(f"{new_system_prompt}")
         self.dynamic_context = await get_dynamic_context(f"{new_dynamic_context}")
 
+    def set_default_system_prompt(self, new_system_prompt: str):
+        self.system_prompt = new_system_prompt
+
+    def set_default_dynamic_context(self, new_dynamic_context: str):
+        self.dynamic_context = new_dynamic_context
+
     async def get_system_prompt(self):
         return self.system_prompt
 
@@ -291,26 +298,13 @@ class PromptManager:
     
 async def main():
     
-    print("🔹 Press Scroll Lock to record your message as audio.")
-    print("🔹 Press Ctrl+Shift+O to save the conversation state.")
-    # print("🔹 Press Ctrl+Shift+I to save the latest user message as an idea event.")
-    print("🔹 Press Ctrl+Shift+R to reload the latest conversation state.")
-
     os.system("cls")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-    global system_prompt
-    global dynamic_context
-    
     
     # Start de taak bij het opstarten
     asyncio.create_task(generate_model_audio_segments())
 
-    # have to make one prompt fetcher for all prompts
-
-    system_prompt = await prompt_manager.get_system_prompt()
-    dynamic_context = await prompt_manager.get_dynamic_context()
     
     await initialize()
 
@@ -334,7 +328,10 @@ async def start_uvicorn():
     server = uvicorn.Server(config)
     await server.serve()
 
-
+# Add this near the end of your file, before the if __name__ == "__main__": block
+async def http_session_shutdown():
+    if 'global_http_session' in globals() and not global_http_session.closed:
+        await global_http_session.close()
 
 if __name__ == "__main__":
     winloop.install()
@@ -344,8 +341,8 @@ if __name__ == "__main__":
     prompt_manager = PromptManager()
     
     async def run_all():
-        global global_http_session
-        global_http_session = aiohttp.ClientSession()
+        await initialize_http_session()
+
         # Set up signal handler at the top level
         # signal.signal(signal.SIGINT, save_conversation)
         load_default_prompts_task = await asyncio.create_task(prompt_manager.load_default_prompts())
@@ -356,6 +353,7 @@ if __name__ == "__main__":
         playback_task = asyncio.create_task(manage_audio_playback())
         # gui_task = asyncio.create_task(gui_loop())
         first_compound_action_task = asyncio.create_task(first_compound_action())
+        tasks_agent_task = asyncio.create_task(tasks_agent())
         obsidian_agent_task = asyncio.create_task(obsidian_agent())
         save_idea_event_task = asyncio.create_task(save_idea_event())
         save_journal_event_task = asyncio.create_task(save_journal_event())
@@ -373,13 +371,14 @@ if __name__ == "__main__":
         obsidian_agent_task.cancel()
         save_idea_event_task.cancel()
         save_journal_event_task.cancel()
+        tasks_agent_task.cancel()
         main_task.cancel()
         text_consumer_task.cancel()
         tool_consumer_task.cancel()
 
-        await global_http_session.close()        
+        await http_session_shutdown()        
         # Wait for cancellation to complete
-        await asyncio.gather(load_default_prompts_task, server, playback_task, obsidian_agent_task, first_compound_action_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
+        await asyncio.gather(load_default_prompts_task, server, playback_task, obsidian_agent_task, first_compound_action_task, tasks_agent_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
         sys.exit(0)
 
     asyncio.run(run_all())
