@@ -96,7 +96,8 @@ record_key_pressed = asyncio.Event()
 record_key_released = asyncio.Event()
 text_chunk_queue = asyncio.Queue(maxsize=1)
 tool_chunk_queue = asyncio.Queue(maxsize=1)
-
+DEFAULT_FADE_MS = 25
+DEFAULT_TRIM_MS = 220
 SENTENCE_END_PATTERN = regex.compile(
     r'(?<=[^\d\s]{2}[.!?])(?= |$)|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)'
 )
@@ -1831,6 +1832,12 @@ async def tts_request(sentence, order):
 
                 # Process audio in a non-blocking way
                 audio = await asyncio.to_thread(AudioSegment.from_file, io.BytesIO(audio_data), format="mp3")
+
+                # Delete the last DEFAULT_FADE_MS milliseconds and add fade-out
+                if DEFAULT_TRIM_MS > 0 and len(audio) > DEFAULT_TRIM_MS:
+                    trimmed_audio = audio[:-DEFAULT_TRIM_MS]
+                    audio = trimmed_audio.fade_out(DEFAULT_FADE_MS)
+                
                 audio_segments[order] = audio
                 
                 # Set events to signal completion

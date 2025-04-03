@@ -1,0 +1,9 @@
+{
+  "system_prompt_file": "system_prompt.txt",
+  "dynamic_context_file": "dynamic_context.txt",
+  "messages_list_file": "chat_20250403213303.json",
+  "summary": "",
+  "timestamp": "20250403213303",
+  "tags": [],
+  "links": []
+}
