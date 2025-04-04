@@ -93,11 +93,15 @@ record_key_pressed = asyncio.Event()
 record_key_released = asyncio.Event()
 text_chunk_queue = asyncio.Queue(maxsize=1)
 tool_chunk_queue = asyncio.Queue(maxsize=1)
-DEFAULT_FADE_MS = 25
-DEFAULT_TRIM_MS = 220
+DEFAULT_FADE_MS = 30
+DEFAULT_TRIM_MS = 200
+# SENTENCE_END_PATTERN = regex.compile(
+#     r'(?<=[^\d\s]{2}[.!?])(?= |$)|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)'
+# )
 SENTENCE_END_PATTERN = regex.compile(
-    r'(?<=[^\d\s]{2}[.!?])(?= |$)|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)'
-)
+    r'(?<=[^\d\s]{2}[.!?])(?=(?![*_])[\s$])|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)')
+
+
 CLEAN_PATTERN = regex.compile(r'(- )|(#)|(\*)')
 HAS_ALNUM = regex.compile(r'[a-zA-Z0-9]')
 
