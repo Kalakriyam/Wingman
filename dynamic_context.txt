@@ -18,31 +18,34 @@
 ## Stappenplan verbeteren van de code:
 We zijn ergens in de volgende lijst, waar nog niet 'GEDAAN' voor staat:
 
-1. GEDAAN: simpel 'refresh' bericht kunnen sturen vanuit obsidian naar een nieuw endpoint in het conversatiescript, zodat het conversatiescript de system prompt en/of dynamische context gaat verversen.
-2. GEDAAN: Het VoiceUI script uitbreiden zodat ik een summary kan invoeren, en sturen naar het conversatiescript. Hiermee leer ik hoe de communicatie tussen de scripts verloopt, wat nodig is voor latere aanpassingen. Ik moet een klasse maken voor deze communicatie, liefst wat 'universeel', waarschijnlijk een nieuw endpoint, en de communication manager uitbreiden met een 'self variabele' voor de summary als dat er nog niet is, en een methode waarmee de save conversation functie (of een andere functie) de summary kan ophalen en gebruiken. 
-    BEREIKT: bonus: het kunnen bewerken van de 'summary' tijdens de conversatie
-3. GEDAAN: **BELANGRIJKSTE UITBREIDING:** Ook *tijdens* het voeren van de conversatie de conversatie kunnen bewerken - dus niet meer alleen via opgeslagen JSON bestanden maar 'live' via de communication manager een kopie van de huidige messages lijst ophalen, deze bewerken, en daarna de communication manager de huidige versie laten vervangen door de bewerkte versie.
-4. GEDAAN: **Een file agent maken:**
-- Een AI-agent ontwikkelen die bestanden kan lezen, schrijven, en bewerken.
-- Deze agent moet bijvoorbeeld de agenda van morgen of bepaalde taken kunnen bewerken en deze als dynamische context en placeholders kunnen verwerken.
-- Het doel is om sneller te werken dan via N8N workflows, door direct met bestanden te communiceren.
-- Functionaliteiten:
-  - Bestanden ophalen en inlezen.
-  - Gewijzigde bestanden opslaan.
+### 🔹 **Fase 1: Lokale controle en bewerkbaarheid** 
+1. ✅ Refresh trigger vanuit Obsidian
+2. ✅ Summary kunnen pushen en bewerken
+3. ✅ Live conversatie kunnen bewerken
+4. ✅ File agent: bestanden lezen/schrijven
+6. 🔜 Gesprekken kunnen openen, groeperen, bewerken (interface)
 
-  - (eventueel later) Bonus: 
-    - Mogelijkheid om bestanden te taggen of te categoriseren voor betere organisatie.
-    - Specifieke secties in bestanden aanpassen (bijvoorbeeld placeholders of dynamische context).
-5. berichten kunnen maken en sturen naar het conversatiescript en andere agents/crews. Berichten kunnen sturen naar agents en andere crews voor het verversen van hun prompts en dynamische context. `agenda-crew: 'ververs systemprompt'`, of: '`Obsidian-crew: Userproxy: 'Volgend rapport mag minder gedetailleerd.'`, of zoiets.
-6. Uitbreiden met een functie om opgeslagen conversaties te kunnen openen en bewerken. De tekstverwerker is al gemaakt bij punt 3. 
-7. uitbreiden van Voice UI zodat ik placeholders in de dynamische context kan bewerken, zoals 'dit ben ik nu aan het doen', en 'dit is relevante code'. Ik moet handmatig in de voice UI kunnen invoeren wat ik nu aan het doen ben, terwijl 'dit is de relevante code' uit een ander bestand gehaald moet worden. NB dat bestand moet later bijgehouden worden door de code crew. Als extra (voor het geval het heel makkelijk gaat) kan ik het script uitbreiden met een eenvoudige tekstverwerker voor het kunnen bewerken van de system prompt en/of dynamische context (filenames staan in het ConversationState object) - manier vinden om het bestand van de server op te halen en weer terug te sturen (via http)
-    - dus de placeholders houd ik bij in het voice UI script.
-    - elke keer als ik een push doe, moeten ook de placeholders vervangen worden. Hoe doe ik dat dan aangezien de huidige system prompt en dynamische context alleen als bestandsnaam worden doorgegeven? Extra velden maken voor de placeholders en het conversatiescript ze te laten vervangen?
-    - ik was al op zoek naar 'permanente placeholders' vanwege het punt hierboven; eenmaal ingevuld kan ik het op dit moment niet nog een keer doen. Maar misschien bestaat hier wel logica voor. 
-        - **BONUS**: ook het conversation state object kunnen ophalen en bewerken, bijvoorbeeld tags toevoegen of wijzigen
-8. ook *tijdens* het voeren van de conversatie de system prompt en/of dynamische context kunnen bewerken. Dus niet meer alleen via het pushen van bestandsnamen, maar ook 'live'. (In een latere stap (welke?) kunnen 'doorlinken' van het object naar de feitelijke opgeslagen JSON conversatie, prompt, of dynamische context, en deze bewerken?)
-9. Overstappen op een database voor events in plaats van allemaal losse .txt en .JSON bestanden. Ik heb nu al zoveel conversation states, idee-events en journal-events dat het niet meer overzichtelijk is. bonus: alle velden van het conversation state object kunnen opslaan, lezen en gebruiken.
-9. alle events kunnen bewerken, begin maken met inter-crew-communicatie (ik kan me voorstellen dat verschillende crews een verzoek moeten kunnen doen aan een 'deep research crew'),getimede berichten en triggers, een RAG oplossing, en daarna  'recepten' (zie [[recepten voor crews]] in Obsidian) voor multicrew workflows (Een recept net zoiets als LangGraph maar waarbij elke node niet alleen een agent is zoals nu, maar ook een **hele agentic workflow** kan zijn).
+> 🔸 *Doel: volledige controle over de lokale staat van een gesprek, inclusief bestanden en metadata.*    
+---
+
+### 🔹 **Fase 2: Dynamische placeholders en context**
+7. 🔜 Placeholders in dynamische context kunnen bewerken via Voice UI
+8. 🔜 Live system prompt en context kunnen bewerken
+
+> 🔸 *Doel: dynamische context wordt een levend onderdeel van het gesprek, niet alleen een bestand.*      
+---
+
+### 🔹 **Fase 3: Messaging & Orkestratie**
+5. 🔜 Berichten kunnen sturen naar andere agents/crews (getimed of direct)
+9. 🔜 Events in database i.p.v.
+losse bestanden
+---
+
+## 💡 Waarom deze volgorde beter werkt:
+
+- Je bouwt eerst **lokale bewerkbaarheid** op (fase 1), zodat je alles kunt aanpassen en testen zonder afhankelijk te zijn van messaging of timing.
+- Daarna maak je de **context dynamisch** (fase 2), zodat je systeem echt *leeft* tijdens een gesprek.    
+- Pas dan ga je naar **inter-agent communicatie en orkestratie** (fase 3), want dan heb je de bouwstenen én de controle om dat goed te doen.
  
 
 # **RELEVANT CODE SNIPPETS FROM THE AI PROJECT:**
@@ -122,16 +125,6 @@ async def update_content(note: NoteData):
     else:
         raise HTTPException(status_code=400, detail="Titel of inhoud ontbreekt")
 
-# @app.post('/message')
-# async def handle_message(message: Message):
-#     if message.action_type == ActionType.PUSH_SUMMARY:
-#         return communication_manager.handle_message(message)
-#     elif message.trigger_type == TriggerType.PULL_CONVERSATION:
-#         return communication_manager.handle_message(message)
-#     elif message.trigger_type == TriggerType.PULL_SUMMARY:
-#         return communication_manager.handle_message(message)
-#     elif message.action_type == ActionType.PUSH_CONVERSATION:
-#         return communication_manager.handle_message(message)
 
 @app.post('/message')
 async def handle_message(message: Message):
@@ -156,7 +149,6 @@ async def reload_default_prompts(refresh: DefaultPrompts):
         
     else:
         raise HTTPException(status_code=400, detail="Bericht incompleet")
-
 
 class CommunicationManager:
     def __init__(self):

@@ -2519,24 +2519,6 @@ class CommunicationManager:
                 self.midi_details = ""
                 print(f"MIDI details added to last message: {self.midi_details}")
 
-# class PromptManager:
-#     def __init__(self):
-#         self.system_prompt = ""
-#         self.dynamic_context = []
-
-#     async def load_default_prompts(self):
-#         self.system_prompt = await get_system_prompt("system_prompt.txt")
-#         self.dynamic_context = await get_dynamic_context("dynamic_context.txt")
-
-#     async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str):
-#         self.system_prompt = await get_system_prompt(f"{new_system_prompt}")
-#         self.dynamic_context = await get_dynamic_context(f"{new_dynamic_context}")
-
-#     async def get_system_prompt(self):
-#         return self.system_prompt
-
-#     async def get_dynamic_context(self):
-#         return self.dynamic_context
 
 class PromptManager:
     def __init__(self):
