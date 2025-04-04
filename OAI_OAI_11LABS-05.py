@@ -45,9 +45,6 @@ dotenv.load_dotenv()
 
 # logging.basicConfig(level=logging.CRITICAL, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# global_http_session: aiohttp.ClientSession = None
-
-
 
 # Add this right after your imports and global definitions
 async def initialize_http_session():
@@ -180,16 +177,6 @@ async def update_content(note: NoteData):
     else:
         raise HTTPException(status_code=400, detail="Titel of inhoud ontbreekt")
 
-# @app.post('/message')
-# async def handle_message(message: Message):
-#     if message.action_type == ActionType.PUSH_SUMMARY:
-#         return communication_manager.handle_message(message)
-#     elif message.trigger_type == TriggerType.PULL_CONVERSATION:
-#         return communication_manager.handle_message(message)
-#     elif message.trigger_type == TriggerType.PULL_SUMMARY:
-#         return communication_manager.handle_message(message)
-#     elif message.action_type == ActionType.PUSH_CONVERSATION:
-#         return communication_manager.handle_message(message)
 
 @app.post('/message')
 async def handle_message(message: Message):
@@ -253,7 +240,7 @@ async def reload_default_prompts(refresh: DefaultPrompts):
 VOICE_ID = "Yko7PKHZNXotIFUBG7I9"
 # MODEL_ID = "eleven_multilingual_v2"
 MODEL_ID = "eleven_flash_v2_5"
-model_options = ["gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview", "chatgpt-4o-latest"]
+model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
 
 current_model_index = 0
 
