@@ -1437,6 +1437,7 @@ async def save_idea_event():
         
         # Create the markdown content for Obsidian
         obsidian_markdown = f"""#idee
+
 link:: {server_filename}
 
 {pretty_timestamp}
@@ -1541,6 +1542,7 @@ async def save_journal_event():
         
         # Create the markdown content for Obsidian
         obsidian_markdown = f"""#journal
+        
 link:: {server_filename}
 
 {pretty_timestamp}
