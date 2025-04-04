@@ -37,8 +37,7 @@ We zijn ergens in de volgende lijst, waar nog niet 'GEDAAN' voor staat:
 
 ### 🔹 **Fase 3: Messaging & Orkestratie**
 5. 🔜 Berichten kunnen sturen naar andere agents/crews (getimed of direct)
-9. 🔜 Events in database i.p.v.
-losse bestanden
+9. 🔜 Events in database i.p.v. losse bestanden
 ---
 
 ## 💡 Waarom deze volgorde beter werkt:
