@@ -94,7 +94,7 @@ record_key_released = asyncio.Event()
 text_chunk_queue = asyncio.Queue(maxsize=1)
 tool_chunk_queue = asyncio.Queue(maxsize=1)
 DEFAULT_FADE_MS = 30
-DEFAULT_TRIM_MS = 200
+DEFAULT_TRIM_MS = 190
 # SENTENCE_END_PATTERN = regex.compile(
 #     r'(?<=[^\d\s]{2}[.!?])(?= |$)|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)'
 # )

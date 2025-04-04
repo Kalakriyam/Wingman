@@ -42,7 +42,7 @@ We zijn ergens in de volgende lijst, waar nog niet 'GEDAAN' voor staat:
         - **BONUS**: ook het conversation state object kunnen ophalen en bewerken, bijvoorbeeld tags toevoegen of wijzigen
 8. ook *tijdens* het voeren van de conversatie de system prompt en/of dynamische context kunnen bewerken. Dus niet meer alleen via het pushen van bestandsnamen, maar ook 'live'. (In een latere stap (welke?) kunnen 'doorlinken' van het object naar de feitelijke opgeslagen JSON conversatie, prompt, of dynamische context, en deze bewerken?)
 9. Overstappen op een database voor events in plaats van allemaal losse .txt en .JSON bestanden. Ik heb nu al zoveel conversation states, idee-events en journal-events dat het niet meer overzichtelijk is. bonus: alle velden van het conversation state object kunnen opslaan, lezen en gebruiken.
-9. alle events kunnen bewerken, begin maken met inter-crew-communicatie (ik kan me voorstellen dat verschillende crews een verzoek moeten kunnen doen aan een 'deep research crew'),getimede berichten en triggers, een RAG oplossing, en daarna  'recepten' voor multicrew workflows (Een recept net zoiets als LangGraph maar waarbij elke node niet alleen een agent is zoals nu, maar ook een **hele agentic workflow** kan zijn).
+9. alle events kunnen bewerken, begin maken met inter-crew-communicatie (ik kan me voorstellen dat verschillende crews een verzoek moeten kunnen doen aan een 'deep research crew'),getimede berichten en triggers, een RAG oplossing, en daarna  'recepten' (zie [[recepten voor crews]] in Obsidian) voor multicrew workflows (Een recept net zoiets als LangGraph maar waarbij elke node niet alleen een agent is zoals nu, maar ook een **hele agentic workflow** kan zijn).
  
 
 # **RELEVANT CODE SNIPPETS FROM THE AI PROJECT:**
