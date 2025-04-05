@@ -94,7 +94,7 @@ record_key_released = asyncio.Event()
 text_chunk_queue = asyncio.Queue(maxsize=1)
 tool_chunk_queue = asyncio.Queue(maxsize=1)
 DEFAULT_FADE_MS = 30
-DEFAULT_TRIM_MS = 190
+DEFAULT_TRIM_MS = 185
 # SENTENCE_END_PATTERN = regex.compile(
 #     r'(?<=[^\d\s]{2}[.!?])(?= |$)|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)'
 # )
@@ -1542,7 +1542,7 @@ async def save_journal_event():
         
         # Create the markdown content for Obsidian
         obsidian_markdown = f"""#journal
-        
+
 link:: {server_filename}
 
 {pretty_timestamp}
