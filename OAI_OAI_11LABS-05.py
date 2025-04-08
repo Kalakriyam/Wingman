@@ -38,7 +38,10 @@ from elevenlabs.client import AsyncElevenLabs
 from cerebras.cloud.sdk import AsyncCerebras
 from filelock import AsyncFileLock
 from collections import defaultdict
-from typing import Optional, Any
+from sqlite3 import connect
+from dataclasses import dataclass
+from threading import Lock
+from typing import Optional, Literal, List, Dict, Any
 from enum import Enum
 
 dotenv.load_dotenv()
@@ -539,150 +542,206 @@ params_no_tools = {
 
 
 
+DATABASE_NAME = "my_personal_database.db"
+TABLE_SHOPPING = "shopping_list"
+TABLE_PERSONAL = "personal_tasks"
+TABLE_PROFESSIONAL = "professional_tasks"
+
+ListType = Literal["shopping", "personal", "professional"]
+PriorityType = Literal["hi", "med", "lo"]
+
+LIST_TYPE_TO_TABLE = {
+    "shopping": TABLE_SHOPPING,
+    "personal": TABLE_PERSONAL,
+    "professional": TABLE_PROFESSIONAL,
+}
+
+TABLES_WITH_PRIORITY = {TABLE_PERSONAL, TABLE_PROFESSIONAL}
+
+class ListManagerDB:
+    def __init__(self, db_path: str = DATABASE_NAME):
+        self._conn = connect(db_path, check_same_thread=False, cached_statements=100)
+        self._lock = Lock()
+        self._configure_database()
+        self._create_tables()
+
+    def _configure_database(self):
+        with self._lock:
+            self._conn.execute("PRAGMA journal_mode = WAL;")
+            self._conn.execute("PRAGMA synchronous = NORMAL;")
+            self._conn.execute("PRAGMA cache_size = -10000;")
+            self._conn.execute("PRAGMA temp_store = MEMORY;")
+
+    def _create_tables(self):
+        with self._lock:
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {TABLE_SHOPPING} (
+                    title TEXT PRIMARY KEY
+                )
+            """)
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {TABLE_PERSONAL} (
+                    title TEXT PRIMARY KEY,
+                    priority TEXT CHECK(priority IN ('hi', 'med', 'lo')) NOT NULL
+                )
+            """)
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {TABLE_PROFESSIONAL} (
+                    title TEXT PRIMARY KEY,
+                    priority TEXT CHECK(priority IN ('hi', 'med', 'lo')) NOT NULL
+                )
+            """)
+            self._conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{TABLE_PERSONAL}_priority 
+                ON {TABLE_PERSONAL} (priority, title)
+            """)
+            self._conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{TABLE_PROFESSIONAL}_priority 
+                ON {TABLE_PROFESSIONAL} (priority, title)
+            """)
+
+    async def list_items(self, table_name: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            cursor = self._conn.cursor()
+            if table_name in TABLES_WITH_PRIORITY:
+                cursor.execute(f"""
+                    SELECT title, priority FROM {table_name}
+                    ORDER BY CASE priority
+                        WHEN 'hi' THEN 1
+                        WHEN 'med' THEN 2
+                        WHEN 'lo' THEN 3
+                    END
+                """)
+                return [{"title": title, "priority": priority} for title, priority in cursor.fetchall()]
+            elif table_name == TABLE_SHOPPING:
+                cursor.execute(f"SELECT title FROM {table_name}")
+                return [{"title": title, "priority": None} for title, in cursor.fetchall()]
+            else:
+                raise ValueError(f"Unknown table name: {table_name}")
+
+    async def add_item(self, table_name: str, title: str, priority: Optional[PriorityType] = "med"):
+        with self._lock, self._conn:
+            if table_name in TABLES_WITH_PRIORITY:
+                self._conn.execute(
+                    f"INSERT OR REPLACE INTO {table_name} (title, priority) VALUES (?, ?)",
+                    (title, priority or "med")
+                )
+            elif table_name == TABLE_SHOPPING:
+                self._conn.execute(
+                    f"INSERT OR REPLACE INTO {table_name} (title) VALUES (?)",
+                    (title,)
+                )
+            else:
+                raise ValueError(f"Cannot add item to unknown table: {table_name}")
+
+    async def delete_item(self, table_name: str, title: str):
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                f"DELETE FROM {table_name} WHERE title=?",
+                (title,)
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Item '{title}' not found in table '{table_name}'.")
+
+    async def update_item_priority(self, table_name: str, title: str, new_priority: PriorityType):
+        if table_name not in TABLES_WITH_PRIORITY:
+            raise ValueError(f"Table '{table_name}' does not support priorities.")
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                f"UPDATE {table_name} SET priority=? WHERE title=?",
+                (new_priority, title)
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Item '{title}' not found in table '{table_name}'.")
+
+@dataclass
+class ListManagerDeps:
+    db: ListManagerDB
+
+class ListItem(BaseModel):
+    title: str = Field(..., description="Title of the item (task or shopping good)")
+    priority: Optional[PriorityType] = Field(None, description="Priority ('hi', 'med', 'lo') for tasks, None for shopping")
 
 async def tasks_agent():
-    
     """
-    Asynchronous coroutine that continuously waits for transcriptions intended
-    for the Pydantic tasks agent. It can read and write files, and streams
-    text output to the text_chunk_queue.
+    Asynchronous coroutine that continuously listens for transcriptions and interacts
+    with a database-backed tasks manager via a PydanticAI agent. Streams output chunks
+    to a text queue for real-time TTS.
     """
     global audio_order
 
     logging.info("\nStarting Tasks Agent event listener...")
-    
+
+    # Define dependencies
+    db = ListManagerDB(db_path="my_personal_database.db")
+    deps = ListManagerDeps(db=db)
+
+    # Create Agent
     tasks_agent = Agent(
-        'google-gla:gemini-2.0-flash', # Use your desired model
-        system_prompt=("""
-# general instructions:
-- You are Bülent, Alexander's AI assistant for tasks, groceries, and brainstorming.
-- Your job is to read the lists in the files, add items to the files, mark items and tasks as done, and work with the scratchpad.
-- Always work step by step as instructed.
+        model="google-gla:gemini-2.0-flash",
+        deps_type=ListManagerDeps,
+        system_prompt=(
+            "You are a helpful assistant managing three lists: a shopping list, "
+            "personal ('daily', 'dagtaken') tasks, and professional ('werktaken'). "
+            "You can add, remove, update, and list items for each list. "
+            "Tasks have priority: 'hi', 'med', or 'lo'. Default to 'med' if missing. "
+            "Shopping items don't have priority. "
+            "Unless stated otherwise, treat task-related prompts as personal. "
+            "When listing, use dash format and sort by priority (hi to lo), but don't show priority labels unless useful."
+        )
+    )
 
-Tasks and items are stored in markdown tasks format:
-- [ ] clean the sink
-- [x] write a blogpost   
-                                           
-The files you have access to are: 
-boodschappen.md (groceries list)
-dagtaken.md (for general, daily tasks)
-werktaken.md (for work related tasks)
-our_scratchpad.md (for brainstorming and collaboration)
-                     
-# list instructions: 
-## Adding items to the list:
-1) Alexander will say something like 'zet pizza op mijn boodschappenlijst'
-2) You will read the file to see if the item is already in the list
-3) if it is, tell Alexander that the item is already in the list
-4) if it is not, write **a new line** with the item to the list
-5) read the file again to verify your changes
-6) if your change didn't work, write the line again
-
-## Modifying items in the list:
-1) Alexander will say something like 'verander pietsa in pizza op mijn boodschappenlijst'
-2) You will read the file to see if the item ('pietsa') is in the list
-3) if it is, write the list again, with the modified item ('pizza')
-4) read the file again to verify your changes
-5) if your change didn't work, write the updated list to the fileagain
-
-## Marking items as done:
-1) Alexander will say something like 'ik heb het bureau opgeruimd'
-2) You will read the daily tasks file to see if the item ('bureau opruimen')  in the list
-3) If it's not in the daily tasks file, read the work tasks file
-4) write the list to the file you found it in, with the item marked as done (use [x])
-5) read the file again to verify your changes
-6) if your change didn't work, write the updated list to the file again 
-
-The file our_scratchpad.md - your 'kladblok' - is where you and Alexander can write down and exchange ideas, thoughts, questions, etc.
-Double check the file after you've written to it, to verify your changes.
-                       
-# correct evident text errors:
-like 'glued together' words:
-'huisartsbellenmedicatie' > 'huisarts bellen medicatie'
-'brahimbellen' > 'Brahim bellen'
-
-or nonexistent words:
-'klapblok' > 'kladblok'
-'dagdaken' > 'dagtaken'
-                                        
-# format of the tasks and items in the files:                   
-The tasks and items are stored in markdown tasks format:
-- [ ] clean the sink
-- [x] write a blogpost
-- [ ] trim beard
-* But you will answer in simple lists without the markdown formatting.
-* Unless explicitly asked, **don't** mention completed tasks in your answers.
-                                          
-# formatting tasks and items in your answers:
-Format your answers like this:
-
-Op je boodschappenlijst staat:
-- appel
-- peer
-                       
-Je hebt nog maar één dagtaak over:
-- kleding kopen
-
-Ik heb afwasmiddel op je boodschappenlijst gezet. 
-
-# using the scratchpad:
-No special formatting required in the file or your answers.
-Use the scratchpad to collaborate, write down and exchange ideas, thoughts, questions, etc.                  
-"""))
-    
-    @tasks_agent.tool
-    async def read_file(ctx: RunContext[str], file_path: str) -> str: # Make the tool async
-        """Reads the content of a .md or .txt file."""
-        allowed_files = ["boodschappen.md", "dagtaken.md", "werktaken.md", "our_scratchpad.md"]
-        if file_path not in allowed_files:
-            return f"Error: Access denied. You can only access {', '.join(allowed_files)}."
-
-        # Use os.path.exists (still sync, but very fast) or try/except below
-        if not os.path.exists(file_path):
-            try:
-                async with aiofiles.open(file_path, 'w', encoding='utf-8') as file:
-                    await file.write("") # Create empty file asynchronously
-                return "" # Return empty string for a new file
-            except Exception as e:
-                return f"Error creating file {file_path}: {e}" # Handle creation error
-
-        # Redundant check removed as allowed_files handles it
-        # if not file_path.endswith(('.md', '.txt')):
-        #     return f"Error: Unsupported file type. Only .txt and .md are allowed."
-
-        try:
-            async with aiofiles.open(file_path, 'r', encoding='utf-8') as file:
-                # Read the file asynchronously
-                return await file.read()
-        except FileNotFoundError:
-            # Should ideally be caught by os.path.exists, but good failsafe
-            return f"Error: File {file_path} does not exist (async read)."
-        except Exception as e:
-            return f"Error reading file {file_path}: {e}"
+    # Register Tools
+    def get_table_name(list_type: ListType) -> str:
+        return LIST_TYPE_TO_TABLE[list_type]
 
     @tasks_agent.tool
-    async def write_file(ctx: RunContext[str], file_path: str, content: str) -> str: # Make the tool async
-        """Writes content to a .md or .txt file."""
-        lock = AsyncFileLock(f"{file_path}.lock")
+    async def list_items(ctx: RunContext[ListManagerDeps], list_type: ListType) -> List[ListItem]:
+        table_name = get_table_name(list_type)
+        data = await ctx.deps.db.list_items(table_name)
+        if table_name in TABLES_WITH_PRIORITY:
+            priority_map = {"hi": 0, "med": 1, "lo": 2}
+            data.sort(key=lambda item: priority_map.get(item["priority"], 3))
+        return [ListItem(**d) for d in data]
 
-        allowed_files = ["boodschappen.md", "dagtaken.md", "werktaken.md", "our_scratchpad.md"]
-        if file_path not in allowed_files:
-            return f"Error: Access denied. You can only access {', '.join(allowed_files)}."
-
+    @tasks_agent.tool
+    async def add_item(ctx: RunContext[ListManagerDeps], list_type: ListType, title: str, priority: Optional[PriorityType] = "med") -> str:
+        table_name = get_table_name(list_type)
+        eff_priority = priority if table_name in TABLES_WITH_PRIORITY else None
         try:
-            async with lock:
-                async with aiofiles.open(file_path, 'w', encoding='utf-8') as file:
-                    # Write the file asynchronously
-                    await file.write(content)
-            return f"Content successfully written to {file_path}."
+            await ctx.deps.db.add_item(table_name, title, eff_priority)
+            return f"Added '{title}' to {list_type} list."
         except Exception as e:
-            return f"Error writing to file {file_path}: {e}"
+            return f"Error adding '{title}': {e}"
 
+    @tasks_agent.tool
+    async def delete_item(ctx: RunContext[ListManagerDeps], list_type: ListType, title: str) -> str:
+        table_name = get_table_name(list_type)
+        try:
+            await ctx.deps.db.delete_item(table_name, title)
+            return f"Deleted '{title}' from {list_type} list."
+        except ValueError as e:
+            return str(e)
+        except Exception as e:
+            return f"Error deleting '{title}': {e}"
+
+    @tasks_agent.tool
+    async def update_task_priority(ctx: RunContext[ListManagerDeps], list_type: ListType, title: str, new_priority: PriorityType) -> str:
+        table_name = get_table_name(list_type)
+        if table_name not in TABLES_WITH_PRIORITY:
+            return f"Priority not supported for {list_type} list."
+        try:
+            await ctx.deps.db.update_item_priority(table_name, title, new_priority)
+            return f"Updated priority of '{title}' to {new_priority}."
+        except ValueError as e:
+            return str(e)
+        except Exception as e:
+            return f"Error updating priority: {e}"
+
+    # Main transcription + streaming loop
     while True:
-        # Wait for transcription using the new method
         user_input = await whisper_transcriber.transcript_to_tasks_agent()
         logging.info(f"TASKS_AGENT: Received transcription: '{user_input}'")
-        # print(f"TASKS_AGENT: Received transcription: '{user_input}'")
         if not user_input:
             logging.warning("TASKS_AGENT: Empty transcription received, skipping.")
             continue
@@ -695,25 +754,20 @@ Use the scratchpad to collaborate, write down and exchange ideas, thoughts, ques
         print("\r>>>>>> Receiving... <<<<<<", end="")
 
         try:
-
-            async with tasks_agent.run_stream(user_input) as result:
+            async with tasks_agent.run_stream(user_input, deps=deps) as result:
                 async for chunk in result.stream_text(delta=True):
-                    if chunk: # Ensure chunk is not empty
+                    if chunk:
                         await text_chunk_queue.put({"type": "text", "content": chunk})
 
             logging.info("TASKS_AGENT: Finished streaming response.")
 
         except Exception as e:
-            logging.error(f"TASKS_AGENT: Error during PydanticAI run: {e}", exc_info=True)
-            # Optionally send an error message to the queue
+            logging.error(f"TASKS_AGENT: Error during agent run: {e}", exc_info=True)
             await text_chunk_queue.put({"type": "text", "content": f"\n[Agent Error: {e}]"})
         finally:
-            print("\r" + " " * 40 + "\r", end="") # Clear the receiving message
-            # Signal that this agent's text stream is complete for this turn
+            print("\r" + " " * 40 + "\r", end="")
             await text_chunk_queue.put({"type": "finalize"})
             logging.debug("TASKS_AGENT: Sent finalize signal to text queue.")
-
-            # Wait for the consumer to acknowledge finalization   
             await text_finalized.wait()
             text_finalized.clear()
             logging.debug("TASKS_AGENT: Text queue consumer finalized.")
@@ -2604,7 +2658,7 @@ if __name__ == "__main__":
         server = asyncio.create_task(start_uvicorn())
         playback_task = asyncio.create_task(manage_audio_playback())
         # gui_task = asyncio.create_task(gui_loop())
-        first_compound_action_task = asyncio.create_task(first_compound_action())
+        # first_compound_action_task = asyncio.create_task(first_compound_action())
         tasks_agent_task = asyncio.create_task(tasks_agent())
         obsidian_agent_task = asyncio.create_task(obsidian_agent())
         save_idea_event_task = asyncio.create_task(save_idea_event())
@@ -2619,7 +2673,7 @@ if __name__ == "__main__":
         server.cancel()
         playback_task.cancel()
         # gui_task.cancel()
-        first_compound_action_task.cancel()
+        # first_compound_action_task.cancel()
         obsidian_agent_task.cancel()
         save_idea_event_task.cancel()
         save_journal_event_task.cancel()
@@ -2630,7 +2684,7 @@ if __name__ == "__main__":
 
         await http_session_shutdown()        
         # Wait for cancellation to complete
-        await asyncio.gather(load_default_prompts_task, server, playback_task, obsidian_agent_task, first_compound_action_task, tasks_agent_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
+        await asyncio.gather(load_default_prompts_task, server, playback_task, obsidian_agent_task, tasks_agent_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
         sys.exit(0)
 
     asyncio.run(run_all())
