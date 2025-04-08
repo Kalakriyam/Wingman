@@ -2318,7 +2318,7 @@ async def process_structured_output(function_name, function_args):
     numbered_sentences.clear()
     
     if function_name == "perplexity_tool":
-        print(f"\r{' ' * len('>>>>>>  Receiving...  <<<<<<<')}\r📡🌎🔍: {function_name}", end="")
+        print(f"\r{' ' * len('>>>>>>  Receiving...  <<<<<<<')}\r📡🌎🔍: Searching the web...", end="")
 
         if isinstance(function_args, str):
             function_args = json.loads(function_args)
@@ -2328,7 +2328,7 @@ async def process_structured_output(function_name, function_args):
         return
 
     if function_name == "n8n_tool":
-        print(f"\r{' ' * len('>>>>>>  Receiving...  <<<<<<<')}\r🛠️ 📞: {function_name}", end="")
+        print(f"\r{' ' * len('>>>>>>  Receiving...  <<<<<<<')}\r🛠️ 📞: Calling your crew...", end="")
         if isinstance(function_args, str):
             function_args = json.loads(function_args)
         chatInput = function_args.get("chatInput")
@@ -2365,7 +2365,7 @@ async def process_structured_output(function_name, function_args):
             logging.error(f"Error sending user input to webhook: {e}")
         return
 
-    print(f"\r{' ' * len('>>>>>>            Receiving...           <<<<<<<')} + \rCalling Obsidian...", end='')
+    print(f"\r{' ' * len('>>>>>>            Receiving...           <<<<<<<')}\rCalling Obsidian...", end='')
 
     try:
         if isinstance(function_args, str):
