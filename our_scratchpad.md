@@ -1,1 +1,0 @@
-Ik ga bezig een pdf-agent te maken. Begin de cursus van Mariam opnieuw.

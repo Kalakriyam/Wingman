@@ -1,4 +1,0 @@
-- [ ] smeerkaas
-- [x] Pieter
-- [ ] pizza
-- [ ] vochtig toiletpapier
