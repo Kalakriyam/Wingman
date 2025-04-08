@@ -685,8 +685,9 @@ async def tasks_agent():
             "personal ('daily', 'dagtaken') tasks, and professional ('werktaken'). "
             "You can add, remove, update, and list items for each list. "
             "Tasks have priority: 'hi', 'med', or 'lo'. Default to 'med' if missing. "
+            "You can correct for obvious errors in the user's input. For example, if the user says 'verwijder nieuwe was draaien van mijn lijst' but the list says 'nieuwe wasdraaie' then you should assume the user meant to say 'verwijder nieuwe was draaie van mijn lijst' and remove that instead."
             "Shopping items don't have priority. "
-            "Unless stated otherwise, treat task-related prompts as personal. "
+            "Unless stated otherwise, assume task-related prompts are about the personal (dagtaken) list. So if the user says 'wat staat er op mijn takenlijst' you should assume they mean the personal list."
             "When listing, use dash format and sort by priority (hi to lo), but don't show priority labels unless useful."
         )
     )
