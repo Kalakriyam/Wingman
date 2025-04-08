@@ -541,6 +541,7 @@ params_no_tools = {
 
 
 async def tasks_agent():
+    
     """
     Asynchronous coroutine that continuously waits for transcriptions intended
     for the Pydantic tasks agent. It can read and write files, and streams
@@ -550,7 +551,7 @@ async def tasks_agent():
 
     logging.info("\nStarting Tasks Agent event listener...")
     
-    tasks_agent_instance = Agent(
+    tasks_agent = Agent(
         'google-gla:gemini-2.0-flash', # Use your desired model
         system_prompt=("""
 # general instructions:
@@ -629,7 +630,7 @@ No special formatting required in the file or your answers.
 Use the scratchpad to collaborate, write down and exchange ideas, thoughts, questions, etc.                  
 """))
     
-    @tasks_agent_instance.tool
+    @tasks_agent.tool
     async def read_file(ctx: RunContext[str], file_path: str) -> str: # Make the tool async
         """Reads the content of a .md or .txt file."""
         allowed_files = ["boodschappen.md", "dagtaken.md", "werktaken.md", "our_scratchpad.md"]
@@ -659,7 +660,7 @@ Use the scratchpad to collaborate, write down and exchange ideas, thoughts, ques
         except Exception as e:
             return f"Error reading file {file_path}: {e}"
 
-    @tasks_agent_instance.tool
+    @tasks_agent.tool
     async def write_file(ctx: RunContext[str], file_path: str, content: str) -> str: # Make the tool async
         """Writes content to a .md or .txt file."""
         lock = AsyncFileLock(f"{file_path}.lock")
@@ -695,7 +696,7 @@ Use the scratchpad to collaborate, write down and exchange ideas, thoughts, ques
 
         try:
 
-            async with tasks_agent_instance.run_stream(user_input) as result:
+            async with tasks_agent.run_stream(user_input) as result:
                 async for chunk in result.stream_text(delta=True):
                     if chunk: # Ensure chunk is not empty
                         await text_chunk_queue.put({"type": "text", "content": chunk})
