@@ -7,6 +7,7 @@ import dotenv
 import aiohttp
 from termcolor import colored
 from groq import Groq
+from openai import OpenAI
 from pydub import AudioSegment
 from io import BytesIO
 
@@ -14,8 +15,10 @@ dotenv.load_dotenv()
 
 class WhisperTranscriber:
     def __init__(self):
-        self.api_key = os.getenv('GROQ_API_KEY')
-        self.client = Groq(api_key=self.api_key)
+        # self.api_key = os.getenv('GROQ_API_KEY')
+        self.api_key = os.getenv('OPENAI_API_KEY')
+        self.client = OpenAI(api_key=self.api_key)
+        # self.client = Groq(api_key=self.api_key)
         self.frames = []
         # Replace single recording flag with a dictionary of recording flags
         self.recording_states = {
@@ -77,7 +80,9 @@ class WhisperTranscriber:
     def _transcribe_audio_sync(self, mp3_buffer):
         transcription_response = self.client.audio.transcriptions.create(
             file=("audio.mp3", mp3_buffer),
-            model="whisper-large-v3-turbo",
+            # model="whisper-large-v3-turbo",
+            model="whisper-1",
+            # model="gpt-4o-transcribe",
             # prompt="Bülent, schattenbout, Obsidian, Aşk, Enver"
             
             # language="nl"

@@ -680,15 +680,31 @@ async def tasks_agent():
     tasks_agent = Agent(
         model="google-gla:gemini-2.0-flash",
         deps_type=ListManagerDeps,
-        system_prompt=(
-            "You are a helpful assistant managing three lists: a shopping list, "
-            "personal ('daily', 'dagtaken') tasks, and professional ('werktaken'). "
-            "You can add, remove, update, and list items for each list. "
-            "Tasks have priority: 'hi', 'med', or 'lo'. Default to 'med' if missing. "
-            "You can correct for obvious errors in the user's input. For example, if the user says 'verwijder nieuwe was draaien van mijn lijst' but the list says 'nieuwe wasdraaie' then you should assume the user meant to say 'verwijder nieuwe was draaie van mijn lijst' and remove that instead."
-            "Shopping items don't have priority. "
-            "Unless stated otherwise, assume task-related prompts are about the personal (dagtaken) list. So if the user says 'wat staat er op mijn takenlijst' you should assume they mean the personal list."
-            "When listing, use dash format and sort by priority (hi to lo), but don't show priority labels unless useful."
+        system_prompt=("""
+Je beheert drie lijsten: boodschappen ('shopping'), persoonlijke taken ('personal') en professionele taken ('professional') .
+Je kunt items toevoegen, verwijderen, aanpassen en opvragen.
+
+**STAPPEN BIJ VERZOEK TOT VERWIJDEREN:**
+Als een gebruiker vraagt om iets te verwijderen, werk dan volgens deze stappen:
+1) Haal de volledige lijst op
+2) Vergelijk de gebruikersvraag met de items in de lijst
+3) Kies het item dat het meest op de gebruikersvraag lijkt
+4) Verwijder het gekozen item
+
+Het is dus essentieel dat je geen exacte tekstvergelijking gebruikt.
+Bijvoorbeeld: als de gebruiker zegt “verwijder het brood van mijn boodschappenlijst”, dan doe je:
+1) de boodschappenlijst geheel ophalen > stel dat je ziet dat de lijst "bruin brood" bevat en geen andere items met 'brood'
+2) de vraag was "verwijder het brood van mijn boodschappenlijst"
+3) het item dat het meest op de vraag lijkt is "bruin brood" (aangezien het de enige 'brood' item is)
+4) verwijder "bruin brood"
+
+Boodschappen hebben geen prioriteit.
+Taken hebben prioriteit: 'hi', 'med', 'lo'.     
+Standaard is 'med'.
+Als de gebruiker niet zegt welke lijst, ga dan uit van de persoonlijke takenlijst.
+Als je een lijst toont, gebruik dan streepjes en sorteer op prioriteit (hi > med > lo).
+Laat prioriteit alleen zien als het relevant is.
+                       """
         )
     )
 
