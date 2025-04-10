@@ -2628,6 +2628,7 @@ async def main():
     # Start de taak bij het opstarten
     asyncio.create_task(generate_model_audio_segments())
 
+    whisper_transcriber.setup_key_handlers()  # Set up all key handlers once
     
     await initialize()
 
@@ -2659,7 +2660,6 @@ async def http_session_shutdown():
 if __name__ == "__main__":
     winloop.install()
     whisper_transcriber = WhisperTranscriber()
-    whisper_transcriber.setup_key_handlers()  # Set up all key handlers once
     communication_manager = CommunicationManager()
     prompt_manager = PromptManager()
     

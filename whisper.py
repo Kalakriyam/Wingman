@@ -53,6 +53,7 @@ class WhisperTranscriber:
         )
         stream.start_stream()
         await self.recording_finished_events[key].wait()
+        await asyncio.sleep(0.2)
         stream.stop_stream()
         stream.close()
         self.recording_finished_events[key].clear()
@@ -98,13 +99,13 @@ class WhisperTranscriber:
 
     # ✅ Nieuwe event-driven key handler setup
     def setup_key_handlers(self):
-        loop = asyncio.get_event_loop()
         for key in self.recording_events.keys():
-            keyboard.on_press_key(key, lambda _, k=key: loop.call_soon_threadsafe(self.recording_events[k].set))
+            keyboard.on_press_key(key, lambda _, k=key: self.recording_events[k].set())
             keyboard.on_release_key(key, lambda _, k=key: (
-                loop.call_soon_threadsafe(self.recording_events[k].clear),
-                loop.call_soon_threadsafe(self.recording_finished_events[k].set)
-            ))
+                self.recording_events[k].clear(),
+                self.recording_finished_events[k].set()
+                ))
+
 
     async def transcript_to_paste(self):
         # I now have Whisper Typing, so I don't need this anymore
