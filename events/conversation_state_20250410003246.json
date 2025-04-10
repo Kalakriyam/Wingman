@@ -1,0 +1,9 @@
+{
+  "system_prompt_file": "system_prompt.txt",
+  "dynamic_context_file": "dynamic_context.txt",
+  "messages_list_file": "chat_20250410003246.json",
+  "summary": "keyboard bibliotheek vervangen door alternatief dat beter met asynchrone code omgaat",
+  "timestamp": "20250410003246",
+  "tags": [],
+  "links": []
+}

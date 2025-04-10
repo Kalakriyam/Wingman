@@ -10,7 +10,8 @@
 
 
 ## Huidige focus:
-{current_focus}
+Het stappenplan zo herschrijven dat ik optimaal `in flow` blijf.
+Ook al wordt het stappenplan er mogelijk licht onlogisch door, ik heb nu een paar voelbare vooruitgangen nodig.
 
 
 ---
