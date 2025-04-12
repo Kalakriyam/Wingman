@@ -19,6 +19,7 @@ import urllib.request
 import urllib.parse
 import orjson
 import tkinter as tk
+import pyperclip
 # import pydantic
 # from mcp.server.fastmcp import FastMCP
 from aiohttp import TCPConnector, AsyncResolver
@@ -2589,9 +2590,17 @@ class CommunicationManager:
             if self.midi_details:
                 last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
                 if last_message:
-                    last_message['content'] += f"\n\nMIDI Details:\n{self.midi_details}"
+                    last_message['content'] += f"\n\n(MIDI Details:)\n{self.midi_details}"
                 self.midi_details = ""
                 print(f"MIDI details added to last message: {self.midi_details}")
+            # Clipboard
+            clipboard_text = pyperclip.paste()
+            if clipboard_text.strip():
+                last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
+                if last_message:
+                    last_message['content'] += f"\n\n(Pasted clipboard content:)\n{clipboard_text.strip()}"
+                pyperclip.copy("")  # Leegmaken
+                print("Clipboard content added to last message.")
 
 
 class PromptManager:
@@ -2636,8 +2645,7 @@ async def main():
         while not shutdown_event.is_set() and not priority_input_event.is_set():
             user_input = await whisper_transcriber.start()
             communication_manager.add_user_message(user_input)
-            if note_received.is_set():
-                communication_manager.process_incoming_message()
+            communication_manager.process_incoming_message()
 
             print("\n>>>>>>  Thinking...  <<<<<<", end='')
             response_text = await chat_with_llm(client, communication_manager.get_messages())
