@@ -189,9 +189,9 @@ async def update_content(note: NoteData):
 @app.post('/message')
 async def handle_message(message: Message):
     if message.action_type:
-        return communication_manager.handle_action(message)
+        return await communication_manager.handle_action(message)
     elif message.trigger_type:
-        return communication_manager.handle_trigger(message)
+        return await communication_manager.handle_trigger(message)
     
 
 @app.post('/update_voice')
@@ -401,14 +401,14 @@ async def first_compound_action():
         except Exception as e:
             print(f"Error communicating with Obsidian: {str(e)}")
         
-        communication_manager.add_user_message(user_input)
+        await communication_manager.add_user_message(user_input)
         await note_received.wait()
-        communication_manager.process_incoming_message()
+        await communication_manager.process_incoming_message()
         note_received.clear()
 
         print("\n>>>>>>  Thinking...  <<<<<<", end='')
-        response_text = await chat_with_llm(client, communication_manager.get_messages())
-        communication_manager.add_assistant_message(response_text)
+        response_text = await chat_with_llm(client, await communication_manager.get_messages())
+        await communication_manager.add_assistant_message(response_text)
 
 n8n_tool = {
     "type": "function",
@@ -808,7 +808,7 @@ def cycle_llm():
 keyboard.add_hotkey('ctrl+shift+l', cycle_llm)
 
 async def get_dynamic_context(filename="dynamic_context.txt"):
-    summary = communication_manager.get_summary()
+    summary = await communication_manager.get_summary()
     try:
         async with global_http_session.get(
             'http://192.168.178.144:5000/read-file',
@@ -864,12 +864,13 @@ async def get_dynamic_context(filename="dynamic_context.txt"):
 
 
 def reset_chat_history():
-    global audio_order, audio_segments, numbered_sentences, dynamic_context, system_prompt
+    global audio_order, audio_segments, numbered_sentences
     audio_order = 0
     audio_segments.clear()
     numbered_sentences.clear()
-    empty_messages = []
-    communication_manager.set_messages(empty_messages)
+    # empty_messages = []
+    # communication_manager.set_messages_sync(empty_messages)
+    communication_manager.set_messages_sync([])
     # system_prompt = await get_system_prompt("system_prompt.txt") # gaat niet, want dit is een sync functie
     # dynamic_context = await get_dynamic_context("dynamic_context.txt") # gaat niet, want dit is een sync functie
     print("Chat history reset.")
@@ -887,8 +888,8 @@ def save_conversation_state(system_prompt_file="system_prompt.txt", dynamic_cont
     states_dir = os.path.join(os.getcwd(), "events/states")
     os.makedirs(states_dir, exist_ok=True)
 
-    messages = communication_manager.get_messages()
-    summary = communication_manager.get_summary()
+    messages = communication_manager.get_messages_sync()
+    summary = communication_manager.get_summary_sync()
 
     messages_path = os.path.join(states_dir, messages_list_file)
     with open(messages_path, 'w', encoding='utf-8') as f:
@@ -930,7 +931,7 @@ def save_conversation_state(system_prompt_file="system_prompt.txt", dynamic_cont
         response = requests.post(
             "http://192.168.178.144:5000/write-file",
             json={"filename": f"events/states/{messages_list_file}",
-                  "content": json.dumps(communication_manager.get_messages(), ensure_ascii=False, indent=2)},
+                  "content": json.dumps(communication_manager.get_messages_sync(), ensure_ascii=False, indent=2)},
             timeout=5
         )
 
@@ -1079,7 +1080,7 @@ def use_specific_conversation_state():
         # Print summary if available
         if conversation_state.summary:
             new_summary = conversation_state.summary
-            communication_manager.load_summary(new_summary) # Update the instance's summary attribute
+            communication_manager.load_summary_sync(new_summary) # Update the instance's summary attribute
             print(f"Conversation summary: {new_summary}")
 
         # 1. Load the system prompt
@@ -1172,7 +1173,7 @@ def use_specific_conversation_state():
                 response_data = response.json()
                 if "content" in response_data:
                     new_messages = json.loads(response_data["content"])
-                    communication_manager.set_messages(new_messages)
+                    communication_manager.set_messages_sync(new_messages)
 
                     messages_loaded = True
                     print(f"Loaded messages from server: {conversation_state.messages_list_file}")
@@ -1193,16 +1194,16 @@ def use_specific_conversation_state():
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8') as f:
                         new_messages = json.loads(f.read())
-                        communication_manager.set_messages(new_messages)
+                        communication_manager.set_messages_sync(new_messages)
                         print(f"Loaded messages from local file: {file_path}")
                 else:
                     print(f"Messages file not found locally: {file_path}")
                     empty_messages = []  # Start with empty messages if file not found
-                    communication_manager.set_messages(empty_messages)
+                    communication_manager.set_messages_sync(empty_messages)
             except Exception as e:
                 print(f"Error loading local messages file: {e}")
                 empty_messages = []  # Ensure messages is reset if loading fails
-                communication_manager.set_messages(empty_messages)
+                communication_manager.set_messages_sync(empty_messages)
         # Replace placeholders in system prompt and dynamic context content
         now = datetime.now()
 
@@ -1216,7 +1217,7 @@ def use_specific_conversation_state():
         if context_content:
             context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
             context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
-            context_content = context_content.replace("{summary}", communication_manager.get_summary())
+            context_content = context_content.replace("{summary}", communication_manager.get_summary_sync())
 
             # Convert context_content to the expected format for dynamic_context
             dynamic_context = [
@@ -1227,8 +1228,7 @@ def use_specific_conversation_state():
 
     else:
         print("Failed to load ConversationState. Starting fresh conversation.")
-        new_messages = []
-        communication_manager.set_messages(new_messages)
+        communication_manager.set_messages_sync([])
         system_prompt = ""
         dynamic_context = []  # Initialize as empty list
 
@@ -1320,7 +1320,7 @@ def load_latest_conversation_state():
         # Print summary if available
         if conversation_state.summary:
             new_summary = conversation_state.summary
-            communication_manager.load_summary(new_summary) # Update the instance's summary attribute
+            communication_manager.load_summary_sync(new_summary) # Update the instance's summary attribute
             print(f"Conversation summary: {new_summary}")
 
         # 1. Load the system prompt
@@ -1413,7 +1413,7 @@ def load_latest_conversation_state():
                 response_data = response.json()
                 if "content" in response_data:
                     new_messages = json.loads(response_data["content"])
-                    communication_manager.set_messages(new_messages)
+                    communication_manager.set_messages_sync(new_messages)
                     messages_loaded = True
                     print(f"Loaded messages from server: {conversation_state.messages_list_file}")
                 else:
@@ -1434,16 +1434,16 @@ def load_latest_conversation_state():
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8') as f:
                         new_messages = json.loads(f.read())
-                        communication_manager.set_messages(new_messages)
+                        communication_manager.set_messages_sync(new_messages)
                         print(f"Loaded messages from local file: {file_path}")
                 else:
                     print(f"Messages file not found locally: {file_path}")
                     empty_messages = []  # Start with empty messages if file not found
-                    communication_manager.set_messages(empty_messages)
+                    communication_manager.set_messages_sync(empty_messages)
             except Exception as e:
                 print(f"Error loading local messages file: {e}")
                 empty_messages = []  # Ensure messages is reset if loading fails
-                communication_manager.set_messages(empty_messages)
+                communication_manager.set_messages_sync(empty_messages)
 
         # Replace placeholders in system prompt and dynamic context content (same as before)
         now = datetime.now()
@@ -1455,7 +1455,7 @@ def load_latest_conversation_state():
             context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
             context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
             print("timestamp replaced")
-            context_content = context_content.replace("{summary}", communication_manager.get_summary())
+            context_content = context_content.replace("{summary}", communication_manager.get_summary_sync())
             dynamic_context = [
                 {"role": "user", "content": context_content},
                 {"role": "assistant", "content": "OK!"}
@@ -1464,8 +1464,7 @@ def load_latest_conversation_state():
 
     else:
         print("Failed to load ConversationState. Starting fresh conversation.")
-        new_messages = []
-        communication_manager.set_messages(new_messages)
+        communication_manager.set_messages_sync([])
         system_prompt = ""
         dynamic_context = []
 
@@ -2190,7 +2189,7 @@ async def obsidian_agent():
         audio_segments.clear()
         numbered_sentences.clear()
         midi_commands.clear()
-        messages = communication_manager.get_messages()
+        messages = await communication_manager.get_messages()
 
         # take only up to the last 5 exchanges in the messages list
         last_exchanges = messages[-5:] if len(messages) >= 5 else messages[:]
@@ -2341,7 +2340,7 @@ async def process_structured_output(function_name, function_args):
             function_args = json.loads(function_args)
         search_query = function_args.get("search_query", "")
         response_text = await perplexity_request(search_query)
-        communication_manager.add_assistant_message(response_text)
+        await communication_manager.add_assistant_message(response_text)
         return
 
     if function_name == "n8n_tool":
@@ -2488,119 +2487,102 @@ class CommunicationManager:
         self.obsidian_content: str = ""
         self.obsidian_title: str = ""
         self.midi_details: str = ""
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         self.summary: str = ""
 
-    def handle_action(self, message: Message) -> None:
-        """Handles incoming messages based on their type and action."""
-
-        # Check for the specific action type for updating the summary
-        if message.action_type == ActionType.PUSH_SUMMARY: # Use the actual Enum member name
-            with self._lock:
-                # FIRST: Check if the payload dictionary exists
+    async def handle_action(self, message: Message) -> str:
+        async with self._lock:
+            if message.action_type == ActionType.PUSH_SUMMARY:
                 if message.payload:
-                    # SECOND: Safely get the 'text' value from the payload
-                    # The .get("text", "") handles cases where 'text' might be missing
-                    new_summary = message.payload.get("text", "")
-                    self.summary = new_summary # Update the instance's summary attribute
-                    print(f"CommunicationManager: Summary updated to: '{self.summary}'") # Optional: Confirmation log
-                    return("summary updated")
+                    self.summary = message.payload.get("text", "")
+                    print(f"CommunicationManager: Summary updated to: '{self.summary}'")
+                    return "summary updated"
                 else:
-                    # Handle the case where payload is None for an update_summary action
-                    # You might want to log this as a warning or error
-                    
                     print("CommunicationManager: Warning - Received UPDATE_SUMMARY action but payload was missing.")
-                    # Decide if you want to clear the summary or leave it as is
-                    # self.summary = "" # Optionally clear if payload is missing
-                    return("warning - payload was missing")
+                    return "warning - payload was missing"
 
-        if message.action_type == ActionType.PUSH_CONVERSATION:
-            with self._lock:
-                # FIRST: Check if the payload dictionary exists
+            if message.action_type == ActionType.PUSH_CONVERSATION:
                 if message.payload:
-                    # SECOND: Safely get the 'text' value from the payload
-                    # The .get("text", "") handles cases where 'text' might be missing
-                    new_conversation = message.payload.get("conversation", [])
-                    self.messages = new_conversation # Update the instance's messages attribute
-                    # print(f"CommunicationManager: Conversation updated to: {self.messages}")
-                    print(f"CommunicationManager: Conversation updated ;-)")
-                    return("conversation updated")
+                    self.messages = message.payload.get("conversation", [])
+                    print("CommunicationManager: Conversation updated ;-)")
+                    return "conversation updated"
                 else:
                     print("CommunicationManager: Warning - Received UPDATE_CONVERSATION action but payload was missing.")
-                    return("warning - payload was missing")
-    
-    def handle_trigger(self, message: Message) -> None:
-        if message.trigger_type == TriggerType.PULL_CONVERSATION:
-            with self._lock:
+                    return "warning - payload was missing"
+
+    async def handle_trigger(self, message: Message):
+        async with self._lock:
+            if message.trigger_type == TriggerType.PULL_CONVERSATION:
                 return self.messages
-            
-        if message.trigger_type == TriggerType.PULL_SUMMARY:
-            with self._lock:
+            if message.trigger_type == TriggerType.PULL_SUMMARY:
                 return self.summary
-            
-    def get_summary(self):
-        with self._lock:
+
+    async def get_summary(self) -> str:
+        async with self._lock:
             return self.summary
-        
-    def load_summary(self, summary: str) -> None:
-        with self._lock:
+
+    async def load_summary(self, summary: str) -> None:
+        async with self._lock:
             self.summary = summary
-            
-    def add_user_message(self, user_input: str) -> None:
-        with self._lock:
+
+    async def add_user_message(self, user_input: str) -> None:
+        async with self._lock:
             self.messages.append({"role": "user", "content": user_input})
 
-    def add_assistant_message(self, assistant_output: str) -> None:
-        with self._lock:
+    async def add_assistant_message(self, assistant_output: str) -> None:
+        async with self._lock:
             self.messages.append({"role": "assistant", "content": assistant_output})
 
-    def get_messages(self) -> list[dict[str, str]]:     
-        with self._lock:
+    async def get_messages(self) -> list[dict[str, str]]:
+        async with self._lock:
             return list(self.messages)
 
-    def set_messages(self, new_messages: list[dict[str, str]]) -> None:
-        with self._lock:
+    async def set_messages(self, new_messages: list[dict[str, str]]) -> None:
+        async with self._lock:
             self.messages = new_messages
 
-    def update_obsidian_content(self, title: str, content: str) -> None:
-        """Update the Obsidian note content."""
-        with self._lock:
+    async def update_obsidian_content(self, title: str, content: str) -> None:
+        async with self._lock:
             self.obsidian_title = title
             self.obsidian_content = content
             note_received.set()
 
-    def update_midi_details(self, midi_details: str) -> None:
-        """Update the MIDI details."""
-        with self._lock:
+    async def update_midi_details(self, midi_details: str) -> None:
+        async with self._lock:
             self.midi_details = midi_details
 
-    def process_incoming_message(self) -> None:
-        """Process additional context (Obsidian notes, MIDI details) and append to the last message."""
-        with self._lock:
-            # Append Obsidian note if available
-            if self.obsidian_content:
-                last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
-                if last_message:
-                    last_message['content'] += f"\n\n(Obsidian Note: {self.obsidian_title})\n{self.obsidian_content}"
+    async def process_incoming_message(self) -> None:
+        async with self._lock:
+            last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
+
+            if self.obsidian_content and last_message:
+                last_message['content'] += f"\n\n(Obsidian Note: {self.obsidian_title})\n{self.obsidian_content}"
+                print(f"Obsidian note added to last message: {self.obsidian_title}")
                 self.obsidian_content = ""
                 self.obsidian_title = ""
-                print(f"Obsidian note added to last message: {self.obsidian_title}")
 
-            # Append MIDI details if available
-            if self.midi_details:
-                last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
-                if last_message:
-                    last_message['content'] += f"\n\n(MIDI Details:)\n{self.midi_details}"
-                self.midi_details = ""
+            if self.midi_details and last_message:   
+                last_message['content'] += f"\n\nMIDI Details:\n{self.midi_details}"
                 print(f"MIDI details added to last message: {self.midi_details}")
+                self.midi_details = ""
             # Clipboard
-            clipboard_text = pyperclip.paste()
-            if clipboard_text.strip():
-                last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
-                if last_message:
-                    last_message['content'] += f"\n\n(Pasted clipboard content:)\n{clipboard_text.strip()}"
-                pyperclip.copy("")  # Leegmaken
+            clipboard_text = await asyncio.to_thread(pyperclip.paste)
+            if clipboard_text.strip() and last_message:
+                last_message['content'] += f"\n\n(Pasted clipboard content:)\n{clipboard_text.strip()}"
+                await asyncio.to_thread(pyperclip.copy, "")  # Leegmaken
                 print("Clipboard content added to last message.")
+
+    def get_messages_sync(self) -> list[dict[str, str]]:
+        return self.messages.copy()
+
+    def get_summary_sync(self) -> str:
+        return self.summary
+
+    def set_messages_sync(self, new_messages: list[dict[str, str]]) -> None:
+        self.messages = new_messages
+
+    def load_summary_sync(self, summary: str) -> None:
+        self.summary = summary
 
 
 class PromptManager:
@@ -2644,12 +2626,12 @@ async def main():
     try:
         while not shutdown_event.is_set() and not priority_input_event.is_set():
             user_input = await whisper_transcriber.start()
-            communication_manager.add_user_message(user_input)
-            communication_manager.process_incoming_message()
+            await communication_manager.add_user_message(user_input)
+            await communication_manager.process_incoming_message()
 
             print("\n>>>>>>  Thinking...  <<<<<<", end='')
-            response_text = await chat_with_llm(client, communication_manager.get_messages())
-            communication_manager.add_assistant_message(response_text)
+            response_text = await chat_with_llm(client, await communication_manager.get_messages())
+            await communication_manager.add_assistant_message(response_text)
 
     finally:
         logging.warning("Shutdown complete.")
