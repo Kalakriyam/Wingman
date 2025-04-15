@@ -945,10 +945,10 @@ def load_latest_conversation_state():
     communication_manager.set_messages_sync(messages)
     print(f"{len(messages)} messages geladen.")
 
-    system_prompt = prompt_manager.get_system_prompt(state["system_prompt_name"])
+    system_prompt = prompt_manager.get_system_prompt_sync(state["system_prompt_name"])
     prompt_manager.set_default_system_prompt(system_prompt)
 
-    dynamic_context = prompt_manager.get_dynamic_context(state["dynamic_context_name"], summary=summary)
+    dynamic_context = prompt_manager.get_dynamic_context_sync(state["dynamic_context_name"], summary=summary)
     prompt_manager.set_default_dynamic_context(dynamic_context)
 
     print(f"Conversation state '{event_id}' geladen.")
