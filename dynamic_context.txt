@@ -24,12 +24,16 @@ We zijn ergens in de volgende lijst, waar nog niet 'GEDAAN' voor staat:
 2. ✅ Summary kunnen pushen en bewerken
 3. ✅ Live conversatie kunnen bewerken
 4. ✅ File agent: bestanden lezen/schrijven
-6. 🔜 Gesprekken kunnen openen, groeperen, bewerken (interface)
+5. 🔜 Events in database i.p.v. losse bestanden
+    > bijna klaar, nu nog de prompts in een database
+    > bonus/later: een 'sync-agent' die de lokale SQLite databases synchroniseert met de cloud (supabase)
+
 
 > 🔸 *Doel: volledige controle over de lokale staat van een gesprek, inclusief bestanden en metadata.*    
 ---
 
 ### 🔹 **Fase 2: Dynamische placeholders en context**
+6. 🔜 Gesprekken kunnen openen, groeperen, bewerken (interface)
 7. 🔜 Placeholders in dynamische context kunnen bewerken via Voice UI
 8. 🔜 Live system prompt en context kunnen bewerken
 
@@ -38,7 +42,7 @@ We zijn ergens in de volgende lijst, waar nog niet 'GEDAAN' voor staat:
 
 ### 🔹 **Fase 3: Messaging & Orkestratie**
 5. 🔜 Berichten kunnen sturen naar andere agents/crews (getimed of direct)
-9. 🔜 Events in database i.p.v. losse bestanden
+
 ---
 
 ## 💡 Waarom deze volgorde beter werkt:

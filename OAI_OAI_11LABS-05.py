@@ -14,10 +14,13 @@ import requests
 import keyboard
 import uvicorn
 import orjson
+import sqlite3
+from sqlite3 import connect
 import tkinter as tk
 import pyperclip
 # import pydantic
 # from mcp.server.fastmcp import FastMCP
+import aiosqlite
 from aiohttp import TCPConnector, AsyncResolver
 from asyncio import to_thread
 from fastapi import FastAPI, HTTPException
@@ -35,7 +38,6 @@ from elevenlabs.client import AsyncElevenLabs
 from cerebras.cloud.sdk import AsyncCerebras
 from filelock import AsyncFileLock
 from collections import defaultdict
-from sqlite3 import connect
 from dataclasses import dataclass
 from threading import Lock
 from typing import Optional, Literal, List, Dict, Any
@@ -245,7 +247,7 @@ VOICE_ID = "Yko7PKHZNXotIFUBG7I9"
 # MODEL_ID = "eleven_multilingual_v2"
 MODEL_ID = "eleven_flash_v2_5"
 # model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
-model_options = ["gpt-4.1","gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.5-preview"]
+model_options = ["chatgpt-4o-latest", "gpt-4.1","gpt-4.1-mini", "gpt-4.5-preview"]
 
 current_model_index = 0
 
@@ -875,18 +877,19 @@ def reset_chat_history():
 keyboard.add_hotkey('ctrl+shift+9', reset_chat_history)
 
 
-def save_conversation_state(system_prompt_file="system_prompt.txt",
-                            dynamic_context_file="dynamic_context.txt") -> str:
+def save_conversation_state(system_prompt_name="system_prompt",
+                            dynamic_context_name="dynamic_context") -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     messages = communication_manager.get_messages_sync()
     summary = communication_manager.get_summary_sync()
     conversation_state = {
-        "system_prompt_file": system_prompt_file,
-        "dynamic_context_file": dynamic_context_file,
+        "system_prompt_name": system_prompt_name,
+        "dynamic_context_name": dynamic_context_name,
         "summary": summary,
         "messages": messages,
         "tags": [],
-        "links": []}
+        "links": []
+    }
     event_id = event_manager.save_event("conversation_state", conversation_state, event_id=timestamp)
     print(f"Conversation state opgeslagen in database met ID: {event_id}")
     return event_id
@@ -912,29 +915,10 @@ def use_specific_conversation_state(event_id: str):
     communication_manager.set_messages_sync(messages)
     print(f"{len(messages)} messages geladen.")
 
-    system_prompt = ""
-    try:
-        with open(state["system_prompt_file"], 'r', encoding='utf-8') as f:
-            system_prompt = f.read()
-    except Exception as e:
-        print(f"Kon system prompt niet laden: {e}")
+    system_prompt = prompt_manager.get_system_prompt(state["system_prompt_name"])
     prompt_manager.set_default_system_prompt(system_prompt)
 
-    context_content = ""
-    try:
-        with open(state["dynamic_context_file"], 'r', encoding='utf-8') as f:
-            context_content = f.read()
-    except Exception as e:
-        print(f"Kon dynamic context niet laden: {e}")
-
-    now = datetime.now()
-    context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-    context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
-    context_content = context_content.replace("{summary}", summary)
-
-    dynamic_context = [
-        {"role": "user", "content": context_content},
-        {"role": "assistant", "content": "OK!"}]
+    dynamic_context = prompt_manager.get_dynamic_context(state["dynamic_context_name"], summary=summary)
     prompt_manager.set_default_dynamic_context(dynamic_context)
 
     print(f"Conversation state '{event_id}' geladen.")
@@ -961,29 +945,10 @@ def load_latest_conversation_state():
     communication_manager.set_messages_sync(messages)
     print(f"{len(messages)} messages geladen.")
 
-    system_prompt = ""
-    try:
-        with open(state["system_prompt_file"], 'r', encoding='utf-8') as f:
-            system_prompt = f.read()
-    except Exception as e:
-        print(f"Kon system prompt niet laden: {e}")
+    system_prompt = prompt_manager.get_system_prompt(state["system_prompt_name"])
     prompt_manager.set_default_system_prompt(system_prompt)
 
-    context_content = ""
-    try:
-        with open(state["dynamic_context_file"], 'r', encoding='utf-8') as f:
-            context_content = f.read()
-    except Exception as e:
-        print(f"Kon dynamic context niet laden: {e}")
-
-    now = datetime.now()
-    context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-    context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
-    context_content = context_content.replace("{summary}", summary)
-
-    dynamic_context = [
-        {"role": "user", "content": context_content},
-        {"role": "assistant", "content": "OK!"}]
+    dynamic_context = prompt_manager.get_dynamic_context(state["dynamic_context_name"], summary=summary)
     prompt_manager.set_default_dynamic_context(dynamic_context)
 
     print(f"Conversation state '{event_id}' geladen.")
@@ -1151,49 +1116,49 @@ async def perplexity_request(llm_request):
     full_response = "".join(numbered_sentences[i] for i in sorted(numbered_sentences.keys()))
     return full_response
 
-async def get_system_prompt(filename):
+# async def get_system_prompt(filename):
 
-    # Step 2: Fetch the Context
-    system_prompt_content = ""
-    try:
-        async with global_http_session.get(
-            'http://192.168.178.144:5000/read-file',
-            params={'filename': filename},
-            timeout=2
-        ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # logging.info(f"Context fetched from server: {data}")
-                    system_prompt_content = data.get('content', "")
-                else:
-                    logging.warning(f"Context server error: {await response.text()}")
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        logging.error(f"Failed to fetch context from server: {e}")
+#     # Step 2: Fetch the Context
+#     system_prompt_content = ""
+#     try:
+#         async with global_http_session.get(
+#             'http://192.168.178.144:5000/read-file',
+#             params={'filename': filename},
+#             timeout=2
+#         ) as response:
+#                 if response.status == 200:
+#                     data = await response.json()
+#                     # logging.info(f"Context fetched from server: {data}")
+#                     system_prompt_content = data.get('content', "")
+#                 else:
+#                     logging.warning(f"Context server error: {await response.text()}")
+#     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+#         logging.error(f"Failed to fetch context from server: {e}")
     
-    # If fetching from server failed, try reading from local file
-    if not system_prompt_content:
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            system_prompt_path = os.path.join(script_dir, filename)
-            async with aiofiles.open(system_prompt_path, 'r', encoding='utf-8') as file:
-                system_prompt_content = await file.read()
-                # logging.info("Context fetched from local file.")
-        except IOError as e:
-            logging.error(f"Failed to read local system prompt file: {e}")
-            return "Failed to retrieve system prompt from both server and local file."
+#     # If fetching from server failed, try reading from local file
+#     if not system_prompt_content:
+#         try:
+#             script_dir = os.path.dirname(os.path.abspath(__file__))
+#             system_prompt_path = os.path.join(script_dir, filename)
+#             async with aiofiles.open(system_prompt_path, 'r', encoding='utf-8') as file:
+#                 system_prompt_content = await file.read()
+#                 # logging.info("Context fetched from local file.")
+#         except IOError as e:
+#             logging.error(f"Failed to read local system prompt file: {e}")
+#             return "Failed to retrieve system prompt from both server and local file."
 
-    # Step 3: Replace Placeholders
-    try:
-        # Replace date and time placeholders
-        now = datetime.now()
-        system_prompt_content = system_prompt_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-        system_prompt_content = system_prompt_content.replace("{local_time}", now.strftime("%H:%M:%S"))
+#     # Step 3: Replace Placeholders
+#     try:
+#         # Replace date and time placeholders
+#         now = datetime.now()
+#         system_prompt_content = system_prompt_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+#         system_prompt_content = system_prompt_content.replace("{local_time}", now.strftime("%H:%M:%S"))
         
-        return system_prompt_content
+#         return system_prompt_content
     
-    except Exception as e:
-        logging.error(f"Error processing {filename} content: {e}")
-        return f"Failed to process {filename} content."
+#     except Exception as e:
+#         logging.error(f"Error processing {filename} content: {e}")
+#         return f"Failed to process {filename} content."
     
 async def initialize():
     global audio_order
@@ -1584,7 +1549,7 @@ async def obsidian_agent():
     after receiving user input and before doing the API call
     """
     global audio_order, global_http_session
-    obsidian_agent_prompt = await get_system_prompt("obsidian_agent_prompt.txt")
+    obsidian_agent_prompt = await prompt_manager.get_system_prompt("obsidian_agent_prompt")
 
 
     logging.info("\nStarting idea event listener...")
@@ -1686,8 +1651,8 @@ async def chat_with_llm(client, messages):
     call_params = dict(params_no_tools) if chosen_model == "chatgpt-4o-latest" else dict(params_with_tools)
     call_params["model"] = chosen_model
 
-    system_prompt = await prompt_manager.get_system_prompt()
-    dynamic_context = await prompt_manager.get_dynamic_context()
+    system_prompt = await prompt_manager.get_system_prompt("system_prompt")
+    dynamic_context = await prompt_manager.get_dynamic_context("dynamic_context")
 
     combined_messages = [{"role": "system", "content": system_prompt}] + dynamic_context + messages
     chat_completion = await client.chat.completions.create(
@@ -2001,31 +1966,6 @@ class CommunicationManager:
         self.summary = summary
 
 
-class PromptManager:
-    def __init__(self):
-        self.system_prompt = ""
-        self.dynamic_context = []
-
-    async def load_default_prompts(self):
-        self.system_prompt = await get_system_prompt("system_prompt.txt")
-        self.dynamic_context = await get_dynamic_context("dynamic_context.txt")
-
-    async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str):
-        self.system_prompt = await get_system_prompt(f"{new_system_prompt}")
-        self.dynamic_context = await get_dynamic_context(f"{new_dynamic_context}")
-
-    def set_default_system_prompt(self, new_system_prompt: str):
-        self.system_prompt = new_system_prompt
-
-    def set_default_dynamic_context(self, new_dynamic_context: str):
-        self.dynamic_context = new_dynamic_context
-
-    async def get_system_prompt(self):
-        return self.system_prompt
-
-    async def get_dynamic_context(self):
-        return self.dynamic_context
-    
 class EventManager:
     def __init__(self, db_path="event_store.db"):
         self.db_path = db_path
@@ -2100,6 +2040,125 @@ class EventManager:
             return row[0]
         return None
     
+
+PROMPT_DB_PATH = 'prompt_store.db'
+
+class PromptManager:
+    def __init__(self, db_path=PROMPT_DB_PATH):
+        self.db_path = db_path
+        self.system_prompt = ""
+        self.dynamic_context = []
+
+    # --- Synchronous methods for hotkey handlers ---
+    def get_system_prompt_sync(self, prompt_name: str) -> str:
+        try:
+            with sqlite3.connect(self.db_path) as db:
+                cursor = db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = cursor.fetchone()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                return (content
+                        .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                        .replace("{local_time}", now.strftime("%H:%M:%S")))
+            else:
+                logging.error(f"No system prompt found in DB for '{prompt_name}'")
+                return f"System prompt '{prompt_name}' not found."
+        except Exception as e:
+            logging.error(f"DB error in get_system_prompt_sync: {e}")
+            return "Error retrieving system prompt."
+
+    def get_dynamic_context_sync(self, prompt_name="dynamic_context", summary="") -> list:
+        try:
+            with sqlite3.connect(self.db_path) as db:
+                cursor = db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = cursor.fetchone()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                content = (content
+                           .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                           .replace("{local_time}", now.strftime("%H:%M:%S"))
+                           .replace("{summary}", summary))
+                return [
+                    {"role": "user", "content": content},
+                    {"role": "assistant", "content": "OK!"}
+                ]
+            else:
+                logging.error(f"No dynamic context found in DB for '{prompt_name}'")
+                return []
+        except Exception as e:
+            logging.error(f"DB error in get_dynamic_context_sync: {e}")
+            return []
+
+    def load_default_prompts_sync(self):
+        self.system_prompt = self.get_system_prompt_sync("system_prompt")
+        self.dynamic_context = self.get_dynamic_context_sync("dynamic_context")
+
+    # --- Asynchronous methods for FastAPI endpoints ---
+    async def get_system_prompt(self, prompt_name: str) -> str:
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = await cursor.fetchone()
+                await cursor.close()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                return (content
+                        .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                        .replace("{local_time}", now.strftime("%H:%M:%S")))
+            else:
+                logging.error(f"No system prompt found async for '{prompt_name}'")
+                return f"System prompt '{prompt_name}' not found."
+        except Exception as e:
+            logging.error(f"DB error in get_system_prompt (async): {e}")
+            return "Error retrieving system prompt."
+
+    async def get_dynamic_context(self, prompt_name="dynamic_context", summary="") -> list:
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = await cursor.fetchone()
+                await cursor.close()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                content = (content
+                           .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                           .replace("{local_time}", now.strftime("%H:%M:%S"))
+                           .replace("{summary}", summary))
+                return [
+                    {"role": "user", "content": content},
+                    {"role": "assistant", "content": "OK!"}
+                ]
+            else:
+                logging.error(f"No dynamic context found async for '{prompt_name}'")
+                return []
+        except Exception as e:
+            logging.error(f"DB error in get_dynamic_context (async): {e}")
+            return []
+
+    async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str, summary=""):
+        self.system_prompt = await self.get_system_prompt(new_system_prompt)
+        self.dynamic_context = await self.get_dynamic_context(new_dynamic_context, summary=summary)
+
+    def set_default_system_prompt(self, new_system_prompt: str):
+        self.system_prompt = new_system_prompt
+
+    def set_default_dynamic_context(self, new_dynamic_context: list):
+        self.dynamic_context = new_dynamic_context
+
+    def get_current_system_prompt(self):
+        return self.system_prompt
+
+    def get_current_dynamic_context(self):
+        return self.dynamic_context
+    
 async def main():
     
     os.system("cls")
@@ -2142,6 +2201,7 @@ if __name__ == "__main__":
     whisper_transcriber = WhisperTranscriber()
     communication_manager = CommunicationManager()
     prompt_manager = PromptManager()
+    prompt_manager.load_default_prompts_sync()
     event_manager = EventManager()
     
     async def run_all():
@@ -2149,7 +2209,6 @@ if __name__ == "__main__":
 
         # Set up signal handler at the top level
         # signal.signal(signal.SIGINT, save_conversation)
-        load_default_prompts_task = await asyncio.create_task(prompt_manager.load_default_prompts())
         main_task = asyncio.create_task(main())
         
 
@@ -2182,7 +2241,7 @@ if __name__ == "__main__":
 
         await http_session_shutdown()        
         # Wait for cancellation to complete
-        await asyncio.gather(load_default_prompts_task, server, playback_task, obsidian_agent_task, tasks_agent_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
+        await asyncio.gather(server, playback_task, obsidian_agent_task, tasks_agent_task, main_task, text_consumer_task, tool_consumer_task, return_exceptions=True)
         sys.exit(0)
 
     asyncio.run(run_all())
