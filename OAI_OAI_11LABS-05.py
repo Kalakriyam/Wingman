@@ -1,4 +1,3 @@
-# de verbeterde tts_request function werkt in deze versie.
 import os
 import asyncio
 import winloop
@@ -98,7 +97,7 @@ record_key_released = asyncio.Event()
 text_chunk_queue = asyncio.Queue(maxsize=1)
 tool_chunk_queue = asyncio.Queue(maxsize=1)
 DEFAULT_FADE_MS = 30
-DEFAULT_TRIM_MS = 185
+DEFAULT_TRIM_MS = 180
 # SENTENCE_END_PATTERN = regex.compile(
 #     r'(?<=[^\d\s]{2}[.!?])(?= |$)|(?<=[^\n]{2})(?=\n)|(?<=:)(?=\n)'
 # )
@@ -248,7 +247,8 @@ async def reload_default_prompts(refresh: DefaultPrompts):
 VOICE_ID = "Yko7PKHZNXotIFUBG7I9"
 # MODEL_ID = "eleven_multilingual_v2"
 MODEL_ID = "eleven_flash_v2_5"
-model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
+# model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
+model_options = ["gpt-4.1","gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.5-preview"]
 
 current_model_index = 0
 
@@ -378,37 +378,37 @@ async def gui_loop():
         print("GUI afgesloten.")
 
 
-async def first_compound_action():
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-    while True:
-        user_input = await whisper_transcriber.transcript_and_note_content()
-        # Get the current note content from Obsidian
-        try:
-            # Using the server running on port 5005 as defined in your Obsidian plugin
-            # Request to get the current active note content
-            payload = {
-                "action": "read_current_note",
-                "payload": {}
-            }
+# async def first_compound_action():
+#     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+#     while True:
+#         user_input = await whisper_transcriber.transcript_and_note_content()
+#         # Get the current note content from Obsidian
+#         try:
+#             # Using the server running on port 5005 as defined in your Obsidian plugin
+#             # Request to get the current active note content
+#             payload = {
+#                 "action": "read_current_note",
+#                 "payload": {}
+#             }
             
-            async with global_http_session.post("http://127.0.0.1:5005/process", 
-                            json=payload) as response:
-                if response.status == 200:
-                    print("Successfully requested current note content")
-                else:
-                    print(f"Failed to request note content: {response.status}")
+#             async with global_http_session.post("http://127.0.0.1:5005/process", 
+#                             json=payload) as response:
+#                 if response.status == 200:
+#                     print("Successfully requested current note content")
+#                 else:
+#                     print(f"Failed to request note content: {response.status}")
             
-        except Exception as e:
-            print(f"Error communicating with Obsidian: {str(e)}")
+#         except Exception as e:
+#             print(f"Error communicating with Obsidian: {str(e)}")
         
-        await communication_manager.add_user_message(user_input)
-        await note_received.wait()
-        await communication_manager.process_incoming_message()
-        note_received.clear()
+#         await communication_manager.add_user_message(user_input)
+#         await note_received.wait()
+#         await communication_manager.process_incoming_message()
+#         note_received.clear()
 
-        print("\n>>>>>>  Thinking...  <<<<<<", end='')
-        response_text = await chat_with_llm(client, await communication_manager.get_messages())
-        await communication_manager.add_assistant_message(response_text)
+#         print("\n>>>>>>  Thinking...  <<<<<<", end='')
+#         response_text = await chat_with_llm(client, await communication_manager.get_messages())
+#         await communication_manager.add_assistant_message(response_text)
 
 n8n_tool = {
     "type": "function",
@@ -701,9 +701,9 @@ Bijvoorbeeld: als de gebruiker zegt “verwijder het brood van mijn boodschappen
 
 Boodschappen hebben geen prioriteit.
 Taken hebben prioriteit: 'hi', 'med', 'lo'.     
-Standaard is 'med'.
+Als bij een taak geen prioriteit wordt genoemd, gebruik dan 'med' als prioriteit.
 Als de gebruiker niet zegt welke lijst, ga dan uit van de persoonlijke takenlijst.
-Als je een lijst toont, gebruik dan streepjes en sorteer op prioriteit (hi > med > lo).
+Als je een lijst toont, gebruik dan streepjes en sorteer op prioriteit (bovenaan beginnen met de hoge prioriteit).
 Laat prioriteit alleen zien als het relevant is.
                        """
         )
