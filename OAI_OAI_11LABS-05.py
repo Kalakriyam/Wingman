@@ -11,11 +11,8 @@ import signal
 import json
 import sys
 import requests
-import threading
 import keyboard
 import uvicorn
-import urllib.request
-import urllib.parse
 import orjson
 import tkinter as tk
 import pyperclip
@@ -27,7 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
-from datetime import datetime, timedelta
+from datetime import datetime
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
@@ -878,655 +875,160 @@ def reset_chat_history():
 keyboard.add_hotkey('ctrl+shift+9', reset_chat_history)
 
 
-def save_conversation_state(system_prompt_file="system_prompt.txt", dynamic_context_file="dynamic_context.txt",
-                            summary=""):
-    # Generate timestamp
+def save_conversation_state(system_prompt_file="system_prompt.txt",
+                            dynamic_context_file="dynamic_context.txt") -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-
-    # Save messages list to events/states folder
-    messages_list_file = f"chat_{timestamp}.json"
-    states_dir = os.path.join(os.getcwd(), "events/states")
-    os.makedirs(states_dir, exist_ok=True)
-
     messages = communication_manager.get_messages_sync()
     summary = communication_manager.get_summary_sync()
-
-    messages_path = os.path.join(states_dir, messages_list_file)
-    with open(messages_path, 'w', encoding='utf-8') as f:
-        json.dump(messages, f, ensure_ascii=False, indent=2)
-
-    # Create ConversationState object
-    conversation_state = ConversationState(
-        system_prompt_file=system_prompt_file,
-        dynamic_context_file=dynamic_context_file,
-        messages_list_file=messages_list_file,
-        summary=summary,
-        timestamp=timestamp,
-        tags=[],  # We'll implement tags later
-        links=[]  # We'll implement links later
-    )
-
-    # Save ConversationState object to events folder
-    events_dir = os.path.join(os.getcwd(), "events")
-    os.makedirs(events_dir, exist_ok=True)
-
-    # Save with timestamp in filename
-    cs_file = f"conversation_state_{timestamp}.json"
-    cs_path = os.path.join(events_dir, cs_file)
-
-    with open(cs_path, 'w', encoding='utf-8') as f:
-        f.write(conversation_state.model_dump_json(indent=2))
-
-    # Also save to the default location for current state
-    current_cs_path = os.path.join(os.getcwd(), "latest_conversation_state.txt")
-    with open(current_cs_path, 'w', encoding='utf-8') as f:
-        f.write(cs_file)  # Just the filename, not the full JSON
-
-    print(f"Conversation state saved as: {cs_path}")
-    print(f"Messages saved as: {messages_path}")
-
-    # Try to save to server as well
-    try:
-        # Save messages to server
-        response = requests.post(
-            "http://192.168.178.144:5000/write-file",
-            json={"filename": f"events/states/{messages_list_file}",
-                  "content": json.dumps(communication_manager.get_messages_sync(), ensure_ascii=False, indent=2)},
-            timeout=5
-        )
-
-        if response.status_code == 200:
-            print(f"Messages saved to server: events/states/{messages_list_file}")
-        else:
-            print(f"Failed to save messages to server. Status code: {response.status_code}")
-
-        # Save ConversationState to server
-        response = requests.post(
-            "http://192.168.178.144:5000/write-file",
-            json={"filename": f"events/{cs_file}", "content": conversation_state.model_dump_json(indent=2)},
-            timeout=5
-        )
-
-        if response.status_code == 200:
-            print(f"ConversationState saved to server: events/{cs_file}")
-        else:
-            print(f"Failed to save ConversationState to server. Status code: {response.status_code}")
-
-        # Update current state file on server
-        response = requests.post(
-            "http://192.168.178.144:5000/write-file",
-            json={"filename": "latest_conversation_state.txt", "content": cs_file},
-            timeout=5
-        )
-
-        if response.status_code == 200:
-            print("Current state reference updated on server")
-        else:
-            print(f"Failed to update current state reference on server. Status code: {response.status_code}")
-
-    except requests.RequestException as e:
-        print(f"Error saving to server: {e}")
-
-    return cs_file
+    conversation_state = {
+        "system_prompt_file": system_prompt_file,
+        "dynamic_context_file": dynamic_context_file,
+        "summary": summary,
+        "messages": messages,
+        "tags": [],
+        "links": []}
+    event_id = event_manager.save_event("conversation_state", conversation_state, event_id=timestamp)
+    print(f"Conversation state opgeslagen in database met ID: {event_id}")
+    return event_id
 
 # put this after the function definition, because it needs to be defined first
 keyboard.add_hotkey('ctrl+shift+o', save_conversation_state)
 
-
-def use_specific_conversation_state():
-    global audio_order
-
-    # Clear audio and sentence queues
-    audio_order = 0
-    audio_segments.clear()
-    numbered_sentences.clear()
-
-    system_prompt = ""
-    dynamic_context = []  # Initialize as empty list, not string
-
-    print("Restarting conversation state...")
-
-    # First try to get the configuration from the server
-    conversation_state_filename = ""
-    try:
-        # Try to get the specific conversation_state.txt file from the server root
-        response = requests.get(
-            "http://192.168.178.144:5000/read-file",
-            params={"filename": "specific_conversation_state.txt"},
-            timeout=5
-        )
-
-        if response.status_code == 200:
-            response_data = response.json()
-            if "content" in response_data:
-                conversation_state_filename = response_data["content"].strip()
-                print(f"Found conversation state reference in server config: {conversation_state_filename}")
-            else:
-                print("Server returned invalid data for config file")
-        else:
-            print(f"Failed to load config from server. Status code: {response.status_code}")
-    except requests.RequestException as e:
-        print(f"Error connecting to server for config: {e}")
-
-    # If server config file is not available or empty, fall back to local config
-    if not conversation_state_filename:
-        print("Falling back to local config file...")
-        try:
-            local_config = os.path.join(os.getcwd(), "specific_conversation_state.txt")
-            if os.path.exists(local_config):
-                with open(local_config, 'r', encoding='utf-8') as f:
-                    conversation_state_filename = f.read().strip()
-                    if conversation_state_filename:
-                        print(f"Found conversation state reference in local config: {conversation_state_filename}")
-        except Exception as e:
-            print(f"Error reading local config file: {e}")
-            conversation_state_filename = ""
-
-    # If config file is empty, just clear messages and return
-    if not conversation_state_filename:
-        print("No specific state requested.  Starting fresh conversation.")
+def use_specific_conversation_state(event_id: str):
+    print(f"Loading specific conversation state: {event_id}")
+    event_type, state = event_manager.get_event_by_id(event_id)
+    if not state or event_type != "conversation_state":
+        print(f"Geen geldige conversation state gevonden voor ID: {event_id}")
+        communication_manager.set_messages_sync([])
+        prompt_manager.set_default_system_prompt("")
+        prompt_manager.set_default_dynamic_context([])
         return
 
-    # Try to load the ConversationState object from server
-    conversation_state = None
-    server_loaded = False
+    summary = state.get("summary", "")
+    communication_manager.load_summary_sync(summary)
+    print(f"Conversation summary: {summary}")
 
+    messages = state.get("messages", [])
+    communication_manager.set_messages_sync(messages)
+    print(f"{len(messages)} messages geladen.")
+
+    system_prompt = ""
     try:
-        response = requests.get(
-            "http://192.168.178.144:5000/read-file",
-            params={"filename": f"events/{conversation_state_filename}"},
-            timeout=5
-        )
+        with open(state["system_prompt_file"], 'r', encoding='utf-8') as f:
+            system_prompt = f.read()
+    except Exception as e:
+        print(f"Kon system prompt niet laden: {e}")
+    prompt_manager.set_default_system_prompt(system_prompt)
 
-        if response.status_code == 200:
-            response_data = response.json()
-            if "content" in response_data:
-                # Parse the JSON into our Pydantic model
-                try:
-                    conversation_state = ConversationState.model_validate_json(response_data["content"])
-                    server_loaded = True
-                    print(f"Loaded ConversationState from server: {conversation_state_filename}")
-                except Exception as e:
-                    print(f"Error parsing ConversationState from server: {e}")
-            else:
-                print(f"Server returned invalid data for file: {conversation_state_filename}")
-        else:
-            print(f"Failed to load ConversationState from server. Status code: {response.status_code}")
-    except requests.RequestException as e:
-        print(f"Error connecting to server for ConversationState: {e}")
+    context_content = ""
+    try:
+        with open(state["dynamic_context_file"], 'r', encoding='utf-8') as f:
+            context_content = f.read()
+    except Exception as e:
+        print(f"Kon dynamic context niet laden: {e}")
 
-    # If server load failed, fallback to local files
-    if not server_loaded:
-        print("Falling back to local ConversationState file...")
-        try:
-            local_file = os.path.join(os.getcwd(), "events", conversation_state_filename)
-            if os.path.exists(local_file):
-                with open(local_file, 'r', encoding='utf-8') as f:
-                    try:
-                        conversation_state = ConversationState.model_validate_json(f.read())
-                        print(f"Loaded ConversationState from local file: {local_file}")
-                    except Exception as e:
-                        print(f"Error parsing ConversationState from local file: {e}")
-                        return
-            else:
-                print(f"ConversationState file not found locally: {local_file}")
-                return
-        except Exception as e:
-            print(f"Error reading local ConversationState file: {e}")
-            return
+    now = datetime.now()
+    context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+    context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
+    context_content = context_content.replace("{summary}", summary)
 
-    # If we have a valid ConversationState, load all required files
-    if conversation_state:
-        # Print summary if available
-        if conversation_state.summary:
-            new_summary = conversation_state.summary
-            communication_manager.load_summary_sync(new_summary) # Update the instance's summary attribute
-            print(f"Conversation summary: {new_summary}")
+    dynamic_context = [
+        {"role": "user", "content": context_content},
+        {"role": "assistant", "content": "OK!"}]
+    prompt_manager.set_default_dynamic_context(dynamic_context)
 
-        # 1. Load the system prompt
-        system_prompt_loaded = False
-        try:
-            response = requests.get(
-                "http://192.168.178.144:5000/read-file",
-                params={"filename": conversation_state.system_prompt_file},
-                timeout=5
-            )
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if "content" in response_data:
-                    system_prompt = response_data["content"]
-                    system_prompt_loaded = True
-                    print(f"Loaded system prompt from server: {conversation_state.system_prompt_file}")
-                else:
-                    print(f"Server returned invalid data for system prompt file")
-            else:
-                print(f"Failed to load system prompt from server. Status code: {response.status_code}")
-        except requests.RequestException as e:
-            print(f"Error connecting to server for system prompt: {e}")
-
-        # If server load failed, fallback to local file
-        if not system_prompt_loaded:
-            print("Falling back to local system prompt file...")
-            try:
-                local_path = os.path.join(os.getcwd(), conversation_state.system_prompt_file)
-                if os.path.exists(local_path):
-                    with open(local_path, 'r', encoding='utf-8') as f:
-                        system_prompt = f.read()
-                        print(f"Loaded system prompt from local file: {local_path}")
-                else:
-                    print(f"System prompt file not found locally: {local_path}")
-                    system_prompt = ""  # Empty system prompt if file not found
-            except Exception as e:
-                print(f"Error loading local system prompt file: {e}")
-                system_prompt = ""
-
-        # 2. Load the dynamic context
-        context_content = ""
-        dynamic_context_loaded = False
-        try:
-            response = requests.get(
-                "http://192.168.178.144:5000/read-file",
-                params={"filename": conversation_state.dynamic_context_file},
-                timeout=5
-            )
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if "content" in response_data:
-                    context_content = response_data["content"]
-                    dynamic_context_loaded = True
-                    print(f"Loaded dynamic context from server: {conversation_state.dynamic_context_file}")
-                else:
-                    print(f"Server returned invalid data for dynamic context file")
-            else:
-                print(f"Failed to load dynamic context from server. Status code: {response.status_code}")
-        except requests.RequestException as e:
-            print(f"Error connecting to server for dynamic context: {e}")
-
-        # If server load failed, fallback to local file
-        if not dynamic_context_loaded:
-            print("Falling back to local dynamic context file...")
-            try:
-                local_path = os.path.join(os.getcwd(), conversation_state.dynamic_context_file)
-                if os.path.exists(local_path):
-                    with open(local_path, 'r', encoding='utf-8') as f:
-                        context_content = f.read()
-                        print(f"Loaded dynamic context from local file: {local_path}")
-                else:
-                    print(f"Dynamic context file not found locally: {local_path}")
-                    context_content = ""  # Empty dynamic context if file not found
-            except Exception as e:
-                print(f"Error loading local dynamic context file: {e}")
-                context_content = ""
-
-        # 3. Load the messages
-        messages_loaded = False
-        try:
-            # Corrected params for the request to the 'states' endpoint
-            response = requests.get(
-                "http://192.168.178.144:5000/read-file",
-                params={"filename": f"events/states/{conversation_state.messages_list_file}"},
-                timeout=5
-            )
-            if response.status_code == 200:
-                response_data = response.json()
-                if "content" in response_data:
-                    new_messages = json.loads(response_data["content"])
-                    communication_manager.set_messages_sync(new_messages)
-
-                    messages_loaded = True
-                    print(f"Loaded messages from server: {conversation_state.messages_list_file}")
-                else:
-                    print(f"Server returned invalid data for messages file")
-            else:
-                print(f"Failed to load messages from server. Status code: {response.status_code}")
-        except requests.RequestException as e:
-            print(f"Error connecting to server for messages: {e}")
-
-        # If server load failed, fallback to local files
-        if not messages_loaded:
-            print("Falling back to local messages file...")
-            try:
-                local_dir = os.path.join(os.getcwd(), "events/states")
-                file_path = os.path.join(local_dir, conversation_state.messages_list_file)
-
-                if os.path.exists(file_path):
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        new_messages = json.loads(f.read())
-                        communication_manager.set_messages_sync(new_messages)
-                        print(f"Loaded messages from local file: {file_path}")
-                else:
-                    print(f"Messages file not found locally: {file_path}")
-                    empty_messages = []  # Start with empty messages if file not found
-                    communication_manager.set_messages_sync(empty_messages)
-            except Exception as e:
-                print(f"Error loading local messages file: {e}")
-                empty_messages = []  # Ensure messages is reset if loading fails
-                communication_manager.set_messages_sync(empty_messages)
-        # Replace placeholders in system prompt and dynamic context content
-        now = datetime.now()
-
-        # Replace date and time placeholders in system prompt
-        if system_prompt:
-            system_prompt = system_prompt.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-            system_prompt = system_prompt.replace("{local_time}", now.strftime("%H:%M:%S"))
-            prompt_manager.set_default_system_prompt(system_prompt)
-
-        # Replace date and time placeholders in dynamic context
-        if context_content:
-            context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-            context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
-            context_content = context_content.replace("{summary}", communication_manager.get_summary_sync())
-
-            # Convert context_content to the expected format for dynamic_context
-            dynamic_context = [
-                {"role": "user", "content": context_content},
-                {"role": "assistant", "content": "OK!"}
-            ]
-            prompt_manager.set_default_dynamic_context(dynamic_context)
-
-    else:
-        print("Failed to load ConversationState. Starting fresh conversation.")
-        communication_manager.set_messages_sync([])
-        system_prompt = ""
-        dynamic_context = []  # Initialize as empty list
+    print(f"Conversation state '{event_id}' geladen.")
 
 # Register the hotkey
 keyboard.add_hotkey('ctrl+shift+0', use_specific_conversation_state)
 
 
 def load_latest_conversation_state():
-    global audio_order
-
-    # Clear audio and sentence queues
-    audio_order = 0
-    audio_segments.clear()
-    numbered_sentences.clear()
-
-    # initialize variables
-    system_prompt = ""
-    dynamic_context = []  # Initialize as empty list, not string
-
     print("Loading latest conversation state...")
-
-    # Try to load the ConversationState object from server
-    conversation_state = None
-    server_loaded = False
-
-    try:
-        # Get the latest conversation state filename
-        response = requests.get(
-            "http://192.168.178.144:5000/read-file",
-            params={"filename": "latest_conversation_state.txt"},
-            timeout=5
-        )
-        if response.status_code == 200:
-            response_data = response.json()
-            if "content" in response_data:
-                conversation_state_filename = response_data["content"].strip()
-                # Load the actual conversation state object
-                response = requests.get(
-                    "http://192.168.178.144:5000/read-file",
-                    params={"filename": f"events/{conversation_state_filename}"},
-                    timeout=5
-                )
-                if response.status_code == 200:
-                    response_data = response.json()
-                    if "content" in response_data:
-                        conversation_state = ConversationState.model_validate_json(response_data["content"])
-                        server_loaded = True
-                        print(f"Loaded ConversationState from server: {conversation_state_filename}")
-                    else:
-                        print("Server returned invalid data for ConversationState file")
-                else:
-                    print(f"Failed to load ConversationState from server. Status code: {response.status_code}")
-
-            else:
-                print("Server returned invalid data for latest_conversation_state.txt")
-        else:
-            print(f"Failed to load latest conversation state filename from server. Status code: {response.status_code}")
-    except requests.RequestException as e:
-        print(f"Error connecting to server: {e}")
-
-        # If server load failed, fallback to local files
-    if not server_loaded:
-        print("Falling back to local files...")
-        try:
-            # First try to find the latest ConversationState file
-            local_cs_file_path = os.path.join(os.getcwd(), "latest_conversation_state.txt")
-
-            if os.path.exists(local_cs_file_path):
-                with open(local_cs_file_path, 'r', encoding='utf-8') as f:
-                    conversation_state_filename = f.read().strip()
-
-                events_dir = os.path.join(os.getcwd(), "events")
-                file_path = os.path.join(events_dir, conversation_state_filename)
-
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    conversation_state = ConversationState.model_validate_json(f.read())
-                    print(f"Loaded latest ConversationState from local file: {file_path}")
-            else:
-                print("No local latest_conversation_state.txt found. Starting fresh.")
-                return
-
-        except Exception as e:
-            print(f"Error loading local conversation state: {e}")
-            return  # Exit if there is an error
-
-
-    # If we have a valid ConversationState, load all required files (same logic as in use_specific_conversation_state)
-    if conversation_state:
-        # Print summary if available
-        if conversation_state.summary:
-            new_summary = conversation_state.summary
-            communication_manager.load_summary_sync(new_summary) # Update the instance's summary attribute
-            print(f"Conversation summary: {new_summary}")
-
-        # 1. Load the system prompt
-        system_prompt_loaded = False
-        try:
-            response = requests.get(
-                "http://192.168.178.144:5000/read-file",
-                params={"filename": conversation_state.system_prompt_file},
-                timeout=5
-            )
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if "content" in response_data:
-                    system_prompt = response_data["content"]
-                    system_prompt_loaded = True
-                    print(f"Loaded system prompt from server: {conversation_state.system_prompt_file}")
-                else:
-                    print(f"Server returned invalid data for system prompt file")
-            else:
-                print(f"Failed to load system prompt from server. Status code: {response.status_code}")
-        except requests.RequestException as e:
-            print(f"Error connecting to server for system prompt: {e}")
-
-        # If server load failed, fallback to local file
-        if not system_prompt_loaded:
-            print("Falling back to local system prompt file...")
-            try:
-                local_path = os.path.join(os.getcwd(), conversation_state.system_prompt_file)
-                if os.path.exists(local_path):
-                    with open(local_path, 'r', encoding='utf-8') as f:
-                        system_prompt = f.read()
-                        print(f"Loaded system prompt from local file: {local_path}")
-                else:
-                    print(f"System prompt file not found locally: {local_path}")
-                    system_prompt = ""  # Empty system prompt if file not found
-            except Exception as e:
-                print(f"Error loading local system prompt file: {e}")
-                system_prompt = ""
-
-        # 2. Load the dynamic context
-        context_content = ""
-        dynamic_context_loaded = False
-        try:
-            response = requests.get(
-                "http://192.168.178.144:5000/read-file",
-                params={"filename": conversation_state.dynamic_context_file},
-                timeout=5
-            )
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if "content" in response_data:
-                    context_content = response_data["content"]
-                    dynamic_context_loaded = True
-                    print(f"Loaded dynamic context from server: {conversation_state.dynamic_context_file}")
-                else:
-                    print(f"Server returned invalid data for dynamic context file")
-            else:
-                print(f"Failed to load dynamic context from server. Status code: {response.status_code}")
-        except requests.RequestException as e:
-            print(f"Error connecting to server for dynamic context: {e}")
-
-        # If server load failed, fallback to local file
-        if not dynamic_context_loaded:
-            print("Falling back to local dynamic context file...")
-            try:
-                local_path = os.path.join(os.getcwd(), conversation_state.dynamic_context_file)
-                if os.path.exists(local_path):
-                    with open(local_path, 'r', encoding='utf-8') as f:
-                        context_content = f.read()
-                        print(f"Loaded dynamic context from local file: {local_path}")
-                else:
-                    print(f"Dynamic context file not found locally: {local_path}")
-                    context_content = ""  # Empty dynamic context if file not found
-            except Exception as e:
-                print(f"Error loading local dynamic context file: {e}")
-                context_content = ""
-
-        # 3. Load the messages
-        messages_loaded = False
-        try:
-             # Corrected params for the request to the 'states' endpoint
-            response = requests.get(
-                "http://192.168.178.144:5000/read-file",
-                params={"filename": f"events/states/{conversation_state.messages_list_file}"},
-                timeout=5
-            )
-            if response.status_code == 200:
-                response_data = response.json()
-                if "content" in response_data:
-                    new_messages = json.loads(response_data["content"])
-                    communication_manager.set_messages_sync(new_messages)
-                    messages_loaded = True
-                    print(f"Loaded messages from server: {conversation_state.messages_list_file}")
-                else:
-                    print(f"Server returned invalid data for messages file")
-            else:
-                print(f"Failed to load messages from server. Status code: {response.status_code}")
-
-        except requests.RequestException as e:
-            print(f"Error connecting to server for messages: {e}")
-
-        # If server load failed, fallback to local files
-        if not messages_loaded:
-            print("Falling back to local messages file...")
-            try:
-                local_dir = os.path.join(os.getcwd(), "events/states")
-                file_path = os.path.join(local_dir, conversation_state.messages_list_file)
-
-                if os.path.exists(file_path):
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        new_messages = json.loads(f.read())
-                        communication_manager.set_messages_sync(new_messages)
-                        print(f"Loaded messages from local file: {file_path}")
-                else:
-                    print(f"Messages file not found locally: {file_path}")
-                    empty_messages = []  # Start with empty messages if file not found
-                    communication_manager.set_messages_sync(empty_messages)
-            except Exception as e:
-                print(f"Error loading local messages file: {e}")
-                empty_messages = []  # Ensure messages is reset if loading fails
-                communication_manager.set_messages_sync(empty_messages)
-
-        # Replace placeholders in system prompt and dynamic context content (same as before)
-        now = datetime.now()
-        if system_prompt:
-            system_prompt = system_prompt.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-            system_prompt = system_prompt.replace("{local_time}", now.strftime("%H:%M:%S"))
-            prompt_manager.set_default_system_prompt(system_prompt)
-        if context_content:
-            context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-            context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
-            print("timestamp replaced")
-            context_content = context_content.replace("{summary}", communication_manager.get_summary_sync())
-            dynamic_context = [
-                {"role": "user", "content": context_content},
-                {"role": "assistant", "content": "OK!"}
-            ]
-            prompt_manager.set_default_dynamic_context(dynamic_context)
-
-    else:
-        print("Failed to load ConversationState. Starting fresh conversation.")
+    event_id, state = event_manager.get_latest_event("conversation_state")
+    if not state:
+        print("Geen conversation state gevonden. Start met lege sessie.")
         communication_manager.set_messages_sync([])
-        system_prompt = ""
-        dynamic_context = []
+        prompt_manager.set_default_system_prompt("")
+        prompt_manager.set_default_dynamic_context([])
+        return
+
+    summary = state.get("summary", "")
+    communication_manager.load_summary_sync(summary)
+    print(f"Conversation summary: {summary}")
+
+    messages = state.get("messages", [])
+    communication_manager.set_messages_sync(messages)
+    print(f"{len(messages)} messages geladen.")
+
+    system_prompt = ""
+    try:
+        with open(state["system_prompt_file"], 'r', encoding='utf-8') as f:
+            system_prompt = f.read()
+    except Exception as e:
+        print(f"Kon system prompt niet laden: {e}")
+    prompt_manager.set_default_system_prompt(system_prompt)
+
+    context_content = ""
+    try:
+        with open(state["dynamic_context_file"], 'r', encoding='utf-8') as f:
+            context_content = f.read()
+    except Exception as e:
+        print(f"Kon dynamic context niet laden: {e}")
+
+    now = datetime.now()
+    context_content = context_content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+    context_content = context_content.replace("{local_time}", now.strftime("%H:%M:%S"))
+    context_content = context_content.replace("{summary}", summary)
+
+    dynamic_context = [
+        {"role": "user", "content": context_content},
+        {"role": "assistant", "content": "OK!"}]
+    prompt_manager.set_default_dynamic_context(dynamic_context)
+
+    print(f"Conversation state '{event_id}' geladen.")
 
 keyboard.add_hotkey('ctrl+shift+r', load_latest_conversation_state)
 
 
 async def save_idea_event():
     """
-    Asynchronous coroutine that continuously waits for transcriptions from idea events (F9 key),
-    and saves each transcription as an idea event to Obsidian in markdown format and to 
-    the private server (or locally as fallback) in JSON format.
-    """
+    Coroutine die continu luistert naar idea events (F9 key),
+    en elk idee opslaat in de database én naar Obsidian stuurt."""
     global global_http_session
-    logging.info("\nStarting idea event listener...")
-    
+    print("Starting idea event listener...")
+
     while True:
-        # Wait for transcription using idea_event method
         user_input = await whisper_transcriber.idea_event()
-        logging.info(f"Received idea event transcription")
-        
         if not user_input:
-            logging.error("Empty transcription received, skipping idea save")
+            print("Lege transcription ontvangen, skip.")
             continue
-        
-        # Generate a timestamp for the event ID
+
         timestamp_id = datetime.now().strftime("%Y%m%d%H%M%S")
-        # Create a prettier timestamp for display
         pretty_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        # Create the event data with transcription as content (for JSON storage)
+
+        # 1. Sla op in database
         event_data = {
             "event_id": timestamp_id,
             "type": "idea",
-            "source": {"content": user_input}
-        }
-        
-        # Convert to JSON for server storage
-        event_json = json.dumps(event_data, indent=2, ensure_ascii=False)
-        
-        # Create the filename that will be used on the server
-        server_filename = f"idea_{timestamp_id}.json"
-        
-        # Create the markdown content for Obsidian
+            "source": {"content": user_input}}
+        event_id = event_manager.save_event("idea", event_data, event_id=timestamp_id)
+        print(f"Idee opgeslagen in database met ID: {event_id}")
+
+        # 2. Stuur naar Obsidian via globale sessie
         obsidian_markdown = f"""#idee
 
-link:: {server_filename}
+link:: idea_{timestamp_id}.json
 
 {pretty_timestamp}
 
-{user_input}
-"""
-        
-        # 1. Save to Obsidian with markdown format
+{user_input}"""
         obsidian_title = f"Inbox/idea_{timestamp_id}"
         obsidian_data = {
             "action": "create_note",
             "payload": {
                 "title": obsidian_title,
-                "text": obsidian_markdown  # Changed from 'content' to 'text' to match plugin
-            }
-        }
-        
+                "text": obsidian_markdown}}
         try:
             async with global_http_session.post(
                 "http://127.0.0.1:5005/process",
@@ -1535,103 +1037,51 @@ link:: {server_filename}
                 timeout=5
             ) as response:
                 if response.status == 200:
-                    logging.info(f"Idea saved to Obsidian: {obsidian_title}")
+                    print(f"Idee ook naar Obsidian gestuurd: {obsidian_title}")
                 else:
-                    logging.error(f"Failed to save idea to Obsidian. Status code: {response.status}")
+                    print(f"Fout bij sturen naar Obsidian. Status code: {response.status}")
         except Exception as e:
-            logging.error(f"Error saving idea to Obsidian: {e}")
-        
-        # 2. Try to save JSON via API to server
-        server_filepath = f"events/{server_filename}"
-        server_data = {
-            'filename': server_filepath,
-            'content': event_json
-        }
-        
-        server_saved = False
-        try:
-            async with global_http_session.post(
-                "http://192.168.178.144:5000/write-file", 
-                json=server_data, 
-                timeout=5
-            ) as response:
-                if response.status == 200:
-                    logging.info(f"Idea saved to server: {server_filepath}")
-                    server_saved = True
-                else:
-                    logging.error(f"Failed to save idea to server. Status code: {response.status}")
-        except Exception as e:
-            logging.error(f"Error saving idea to server: {e}")
-        
-        # 3. Fallback: Save locally if server save failed
-        if not server_saved:
-            try:
-                local_dir = os.path.join(os.getcwd(), "events")
-                os.makedirs(local_dir, exist_ok=True)  # Ensure the directory exists
-                local_path = os.path.join(local_dir, server_filename)
-                
-                with open(local_path, 'w', encoding='utf-8') as f:
-                    f.write(event_json)
-                logging.info(f"Idea saved locally: {local_path}")
-            except IOError as e:
-                logging.error(f"Error saving idea locally: {e}")
+            print(f"Error bij sturen naar Obsidian: {e}")
+
 
 async def save_journal_event():
     """
-    Asynchronous coroutine that continuously waits for transcriptions from journal events (F7 key),
-    and saves each transcription as a new journal entry to Obsidian in markdown format and to 
-    the private server (or locally as fallback) in JSON format.
-    """
+    Coroutine die continu luistert naar journal events (F7 key),
+    en elk journal opslaat in de database én naar Obsidian stuurt."""
     global global_http_session
-    logging.info("\nStarting journal event listener...")
-    
+    print("Starting journal event listener...")
+
     while True:
-        # Wait for transcription using journal_event method
         user_input = await whisper_transcriber.journal_event()
-        logging.info(f"Received journal event transcription")
-        
         if not user_input:
-            logging.error("Empty transcription received, skipping journal save")
+            print("Lege transcription ontvangen, skip.")
             continue
-        
-        # Generate a timestamp for the event ID
+
         timestamp_id = datetime.now().strftime("%Y%m%d%H%M%S")
-        # Create a prettier timestamp for display
         pretty_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        # Create the event data with transcription as content (for JSON storage)
+
+        # 1. Sla op in database
         event_data = {
             "event_id": timestamp_id,
             "type": "journal",
-            "source": {"content": user_input}
-        }
-        
-        # Convert to JSON for server storage
-        event_json = json.dumps(event_data, indent=2, ensure_ascii=False)
-        
-        # Create the filename that will be used on the server
-        server_filename = f"journal_{timestamp_id}.json"
-        
-        # Create the markdown content for Obsidian
+            "source": {"content": user_input}}
+        event_id = event_manager.save_event("journal", event_data, event_id=timestamp_id)
+        print(f"Journal event opgeslagen in database met ID: {event_id}")
+
+        # 2. Stuur naar Obsidian via globale sessie
         obsidian_markdown = f"""#journal
 
-link:: {server_filename}
+link:: journal_{timestamp_id}.json
 
 {pretty_timestamp}
 
-{user_input}
-"""
-        
-        # 1. Save to Obsidian with markdown format
+{user_input}"""
         obsidian_title = f"Inbox/journal_{timestamp_id}"
         obsidian_data = {
             "action": "create_note",
             "payload": {
                 "title": obsidian_title,
-                "text": obsidian_markdown  # Changed from 'content' to 'text' to match plugin
-            }
-        }
-        
+                "text": obsidian_markdown}}
         try:
             async with global_http_session.post(
                 "http://127.0.0.1:5005/process",
@@ -1640,46 +1090,12 @@ link:: {server_filename}
                 timeout=5
             ) as response:
                 if response.status == 200:
-                    logging.info(f"Journal event saved to Obsidian: {obsidian_title}")
+                    print(f"Journal event ook naar Obsidian gestuurd: {obsidian_title}")
                 else:
-                    logging.error(f"Failed to save journal event to Obsidian. Status code: {response.status}")
+                    print(f"Fout bij sturen naar Obsidian. Status code: {response.status}")
         except Exception as e:
-            logging.error(f"Error saving journal event to Obsidian: {e}")
-        
-        # 2. Try to save JSON via API to server
-        server_filepath = f"events/{server_filename}"
-        server_data = {
-            'filename': server_filepath,
-            'content': event_json
-        }
-        
-        server_saved = False
-        try:
-            async with global_http_session.post(
-                "http://192.168.178.144:5000/write-file", 
-                json=server_data, 
-                timeout=5
-            ) as response:
-                if response.status == 200:
-                    logging.info(f"Journal event saved to server: {server_filepath}")
-                    server_saved = True
-                else:
-                    logging.error(f"Failed to save journal event to server. Status code: {response.status}")
-        except Exception as e:
-            logging.error(f"Error saving journal event to server: {e}")
-        
-        # 3. Fallback: Save locally if server save failed
-        if not server_saved:
-            try:
-                local_dir = os.path.join(os.getcwd(), "events")
-                os.makedirs(local_dir, exist_ok=True)  # Ensure the directory exists
-                local_path = os.path.join(local_dir, server_filename)
-                
-                with open(local_path, 'w', encoding='utf-8') as f:
-                    f.write(event_json)
-                logging.info(f"Journal event saved locally: {local_path}")
-            except IOError as e:
-                logging.error(f"Error saving journal event locally: {e}")
+            print(f"Error bij sturen naar Obsidian: {e}")
+
 
 async def perplexity_request(llm_request):
     global audio_order
@@ -2610,6 +2026,80 @@ class PromptManager:
     async def get_dynamic_context(self):
         return self.dynamic_context
     
+class EventManager:
+    def __init__(self, db_path="event_store.db"):
+        self.db_path = db_path
+        self.lock = Lock()
+        self._init_db()
+
+    def _init_db(self):
+        with connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT UNIQUE,
+                    type TEXT,
+                    content TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            # Settings-tabel toevoegen
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT)""")
+            conn.commit()
+
+    def save_event(self, event_type: str, content: dict, event_id: str = None):
+        if event_id is None:
+            event_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        content_json = orjson.dumps(content).decode('utf-8')
+        with self.lock, connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO events (event_id, type, content) VALUES (?, ?, ?)",
+                (event_id, event_type, content_json))
+            conn.commit()
+        return event_id
+
+    def get_latest_event(self, event_type: str):
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT event_id, content FROM events WHERE type = ? ORDER BY created_at DESC LIMIT 1",
+                (event_type,))
+            row = cursor.fetchone()
+        if row:
+            event_id, content_json = row
+            content = orjson.loads(content_json)
+            return event_id, content
+        return None, None
+
+    def get_event_by_id(self, event_id: str):
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT type, content FROM events WHERE event_id = ?",
+                (event_id,))
+            row = cursor.fetchone()
+        if row:
+            event_type, content_json = row
+            content = orjson.loads(content_json)
+            return event_type, content
+        return None, None
+    
+    def set_setting(self, key: str, value: str):
+        with self.lock, connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value))
+            conn.commit()
+
+    def get_setting(self, key: str) -> str | None:       
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,))
+            row = cursor.fetchone()
+        if row:
+            return row[0]
+        return None
+    
 async def main():
     
     os.system("cls")
@@ -2652,6 +2142,7 @@ if __name__ == "__main__":
     whisper_transcriber = WhisperTranscriber()
     communication_manager = CommunicationManager()
     prompt_manager = PromptManager()
+    event_manager = EventManager()
     
     async def run_all():
         await initialize_http_session()
