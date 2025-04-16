@@ -1,0 +1,1471 @@
+# **CONTEXT:**
+
+## Datum en tijd:
+{local_date}
+{local_time}
+
+
+## Doel van de huidige conversatie:
+Voice UI uitbreiden met de mogelijkheid om prompts op te halen uit het conversatiescript, en ze te bewerken, net zoals nu al met de messages en de conversation summary kan.
+{summary}
+
+
+## Huidige focus:
+- de code van voice UI begrjipen
+- dan het paneel uitbreiden waar nu alleen de knop 'push prompt refresh' in staat.
+- goede aansluiting maken met het conversatiescript.
+{current_focus}
+
+
+## Als huidige focus (grotendeels) bereikt is:
+edit-venster beter integreren in Voice UI. Het moet overzichtelijk en betrouwbaar blijven. Als je toch uitklapt moet je altijd eerst weer naar het overzichtsscherm om te voorkomen dat er meerdere opgengeklapte vensters komen.
+een versie-systeem maken zodat ik terug kan naar oude combinaties. Misschien zijn dat ook wel events of 'states'.
+{upcoming_focus}
+---
+
+## De code van VoiceUI:
+```python
+import tkinter as tk
+import tkinter.ttk as ttk
+import tkinter.messagebox as messagebox
+import tkinter.font as tkfont # Import font module
+import requests
+import json
+import copy # Needed for deep copy
+
+# --- Data ---
+voices = {
+    "Martin_int": "a5n9pJUnAhX4fn7lx3uo",
+    "Frank": "gFwlAMshRYWaSeoMt2md",
+    "Robert": "BtWabtumIemAotTjP5sk",
+    "George": "Yko7PKHZNXotIFUBG7I9",
+    "Educational_Elias": "bYS7cEY0uRew5lIOkGCu",
+    "Will": "bIHbv24MWmeRgasZH58o",
+    "David_conversational": "EozfaQ3ZX0esAp1cW5nG",
+    "Harrison": "fCxG8OHm4STbIsWe4aT9"
+}
+
+# --- Configuration ---
+SERVER_BASE_URL = "http://127.0.0.1:5001"
+UPDATE_VOICE_ENDPOINT = "/update_voice"
+RELOAD_PROMPTS_ENDPOINT = "/reload_default_prompts"
+MESSAGE_ENDPOINT = "/message" # Used for summary pull/push and message pull/push
+
+# --- Consistent Sender/Recipient Names ---
+SENDER_NAME = "voice_ui"
+RECIPIENT_NAME = "conversation_script"
+
+# --- Consistent Action Types ---
+ACTION_PULL_SUMMARY = "pull_summary"
+ACTION_PULL_CONVERSATION = "pull_conversation"
+ACTION_PUSH_SUMMARY = "push_summary" # Renamed
+ACTION_PUSH_CONVERSATION = "push_conversation" # New
+
+# --- UI ---
+
+class VoiceSelectorApp:
+    def __init__(self, root, voices):
+        self.root = root
+        self.voices = voices
+        self.voice_names = list(voices.keys())
+        self.current_index = 0
+
+        self.root.title("Voice Selector & Control")
+        self.style = ttk.Style()
+        self.style.theme_use("clam") # Or another theme like 'vista', 'xpnative' if preferred
+
+        # --- Message Data Storage ---
+        self.original_messages: list[dict[str, str]] | None = None
+        self.current_messages: list[dict[str, str]] | None = None
+        self.messages_modified_flag: bool = False
+        self.messages_window: tk.Toplevel | None = None
+        self.messages_text_widget: tk.Text | None = None # Reference to widget in messages window
+
+        # --- Main Frame ---
+        self.main_frame = ttk.Frame(root, padding="20")
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        try:
+            # Try Segoe UI first - Increase sizes by ~1.5x
+            default_size = 17 # Was 11
+            header_size = 21  # Was 14
+            editor_size = 17  # Was 11
+            self.default_font = tkfont.Font(family="Segoe UI", size=default_size)
+            self.header_font = tkfont.Font(family="Segoe UI", size=header_size, weight="bold")
+            self.editor_font = tkfont.Font(family="Segoe UI", size=editor_size)
+            print(f"Using Segoe UI font. Sizes: Default={default_size}, Header={header_size}, Editor={editor_size}")
+        except tk.TclError:
+            # Fallback to Verdana - Increase sizes by ~1.5x
+            print("Segoe UI not found, falling back to Verdana.")
+            default_size = 15 # Was 10
+            header_size = 18  # Was 12
+            editor_size = 15  # Was 10
+            self.default_font = tkfont.Font(family="Verdana", size=default_size)
+            self.header_font = tkfont.Font(family="Verdana", size=header_size, weight="bold")
+            self.editor_font = tkfont.Font(family="Verdana", size=editor_size)
+            print(f"Using Verdana font. Sizes: Default={default_size}, Header={header_size}, Editor={editor_size}")
+
+        # --- Configure ttk Styles ---
+        # Styles will inherit the new default_font size automatically
+        self.style.configure(".", font=self.default_font)
+        self.style.configure("TButton", font=self.default_font)
+        self.style.configure("TLabel", font=self.default_font)
+        self.style.configure("TEntry", font=self.default_font)
+
+        # --- Apply Specific Fonts ---
+        # Voice Display (Use Header Font)
+        self.voice_label = ttk.Label(self.main_frame, text=self.voice_names[self.current_index], font=self.header_font) # Apply header font
+        self.voice_label.pack(pady=10)
+
+        # Up/Down Buttons (Will use default style)
+        self.button_frame = ttk.Frame(self.main_frame)
+        self.button_frame.pack()
+        self.up_button = ttk.Button(self.button_frame, text="▲", command=self.scroll_up, width=3)
+        self.up_button.pack(side=tk.LEFT, padx=5)
+        self.down_button = ttk.Button(self.button_frame, text="▼", command=self.scroll_down, width=3)
+        self.down_button.pack(side=tk.LEFT, padx=5)
+
+
+        # Send Button (Will use default style + Accent)
+        self.send_button = ttk.Button(self.main_frame, text="Send Voice", command=self.send_current_voice, style="Accent.TButton") # Style includes font
+        self.send_button.pack(pady=20)
+
+        # Error & Status Labels (Use default style)
+        self.error_label = ttk.Label(self.main_frame, text="", foreground="red", wraplength=400) # Increased wraplength?
+        self.error_label.pack()
+        self.status_label = ttk.Label(self.main_frame, text="", foreground="green", wraplength=400)
+        self.status_label.pack()
+
+        # --- Separator ---
+        self.separator1 = ttk.Separator(self.main_frame, orient='horizontal')
+        self.separator1.pack(fill='x', pady=10)
+
+        # --- Prompt Refresh Button ---
+        self.refresh_button = ttk.Button(self.main_frame, text="Push Prompt Refresh", command=self.reload_prompts) # Will use default style
+        self.refresh_button.pack(pady=(0, 5))
+
+        # --- Separator for Messages ---
+        self.separator2 = ttk.Separator(self.main_frame, orient='horizontal')
+        self.separator2.pack(fill='x', pady=10)
+
+        # --- Message Control Section ---
+        self.message_control_frame = ttk.Frame(self.main_frame) # Buttons use default style
+        self.message_control_frame.pack(pady=(10, 5))
+
+        self.pull_messages_button = ttk.Button(self.message_control_frame, text="Pull Messages", command=self.pull_messages)
+        self.pull_messages_button.pack(side=tk.LEFT, padx=5)
+
+        self.edit_messages_button = ttk.Button(self.message_control_frame, text="Edit Messages", command=self.edit_messages, state=tk.DISABLED)
+        self.edit_messages_button.pack(side=tk.LEFT, padx=5)
+
+        # Renamed command to push_main_messages
+        self.push_messages_button = ttk.Button(self.message_control_frame, text="Push Messages", command=self.push_main_messages, state=tk.DISABLED)
+        self.push_messages_button.pack(side=tk.LEFT, padx=5)
+
+        self.clear_messages_button = ttk.Button(self.message_control_frame, text="Clear Messages", command=self.clear_local_messages, state=tk.DISABLED)
+        self.clear_messages_button.pack(side=tk.LEFT, padx=5)
+
+        # --- Message Status Label ---
+        self.messages_status_label = ttk.Label(self.main_frame, text="Messages: None") # Will use default style
+        self.messages_status_label.pack(pady=(0, 10))
+
+
+        # --- Separator for Summary ---
+        self.summary_separator = ttk.Separator(self.main_frame, orient='horizontal')
+        self.summary_separator.pack(fill='x', pady=(15, 5))
+
+        # --- Summary Section ---
+        self.summary_label = ttk.Label(self.main_frame, text="Conversation Summary:") # Will use default style
+        self.summary_label.pack(pady=(5, 2))
+
+        # --- NEW: Use tk.Text for Summary ---
+        self.summary_frame = ttk.Frame(self.main_frame) # Frame to hold text and scrollbar
+        self.summary_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        self.summary_scrollbar = ttk.Scrollbar(self.summary_frame)
+        self.summary_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.summary_entry = tk.Text( # Changed from tk.Entry
+            self.summary_frame,
+            height=4, # Set initial height (adjust as needed)
+            wrap=tk.WORD, # Enable word wrapping
+            font=self.default_font, # Apply the larger font
+            yscrollcommand=self.summary_scrollbar.set
+        )
+        self.summary_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.summary_scrollbar.config(command=self.summary_entry.yview)
+        # --- End NEW ---
+
+        self.summary_button_frame = ttk.Frame(self.main_frame) # Buttons use default style
+        self.summary_button_frame.pack()
+        self.pull_summary_button = ttk.Button(self.summary_button_frame, text="Pull Summary", command=self.pull_summary)
+        self.pull_summary_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # --- ADDED Summarize Button ---
+        self.summarize_button = ttk.Button(self.summary_button_frame, text="Summarize Messages", command=self._summarize_messages_placeholder, state=tk.DISABLED)
+        self.summarize_button.pack(side=tk.LEFT, padx=5)
+        # --- END ADDED ---
+
+        self.push_summary_button = ttk.Button(self.summary_button_frame, text="Push Summary", command=self.push_summary)
+        self.push_summary_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # --- Configure Accent Style ---
+        self.style.configure("Accent.TButton", background="#4CAF50", foreground="white") # Font already set by root style "."
+        self.style.map("Accent.TButton",
+                       background=[("active", "#388E3C"), ("pressed", "#2E7D32")],
+                       foreground=[("active", "white"), ("pressed", "white")])
+
+        # Initialize display and button states
+        self.update_voice_display()
+        self._update_messages_status_and_buttons() # Initial update for message buttons/status
+
+    # --- Voice Controls ---
+    def scroll_up(self):
+        self.current_index = (self.current_index - 1) % len(self.voice_names)
+        self.update_voice_display()
+
+    def scroll_down(self):
+        self.current_index = (self.current_index + 1) % len(self.voice_names)
+        self.update_voice_display()
+
+    def update_voice_display(self):
+        # self.voice_label.config(text=f"{self.voice_names[self.current_index]}: {self.voices[self.voice_names[self.current_index]]}")
+        self.voice_label.config(text=f"{self.voice_names[self.current_index]}")
+
+    def _clear_messages(self):
+        """Clears status and error messages."""
+        self.error_label.config(text="")
+        self.status_label.config(text="")
+
+    def send_current_voice(self):
+        self._clear_messages()
+        voice_id = self.voices[self.voice_names[self.current_index]]
+        voice_name = self.voice_names[self.current_index]
+        url = f"{SERVER_BASE_URL}{UPDATE_VOICE_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        data = {"voice_id": voice_id, "voice_name": voice_name}
+
+        try:
+            # Disable button during request
+            self.send_button.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
+            response.raise_for_status()
+            try:
+                response_data = response.json()
+                self.status_label.config(text=response_data.get('message', 'Voice updated (No message)'))
+                print(f"Successfully sent voice ID ({voice_id}) for {voice_name}, Response: {response_data}")
+            except json.JSONDecodeError:
+                self.status_label.config(text="Voice update successful (non-JSON response)")
+                print(f"Successfully sent voice ID ({voice_id}). Status: {response.status_code}, Response: {response.text}")
+
+        except requests.exceptions.Timeout:
+            self.error_label.config(text="Error: Voice update request timed out.")
+            print(f"Error: Timeout sending voice update to {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending voice update request: {e}")
+            error_details = self._format_request_error(e)
+            self.error_label.config(text=f"Voice Update Error: {error_details}")
+        finally:
+            # Re-enable button
+             self.send_button.config(state=tk.NORMAL)
+
+    # --- Prompt Controls ---
+    def reload_prompts(self):
+        self._clear_messages()
+        url = f"{SERVER_BASE_URL}{RELOAD_PROMPTS_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "system_prompt": "system_prompt.txt",
+            "dynamic_context": "dynamic_context.txt"
+        }
+
+        try:
+            # Disable button
+            self.refresh_button.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
+            response.raise_for_status()
+            try:
+                response_data = response.json()
+                self.status_label.config(text=response_data.get('message', 'Prompts reloaded (No message)'))
+                print(f"Successfully reloaded prompts, Response: {response_data}")
+            except json.JSONDecodeError:
+                self.status_label.config(text="Prompts reloaded successfully (non-JSON response)")
+                print(f"Successfully reloaded prompts. Status: {response.status_code}, Response: {response.text}")
+
+        except requests.exceptions.Timeout:
+            self.error_label.config(text="Error: Prompt reload request timed out.")
+            print(f"Error: Timeout requesting prompt reload from {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending prompt reload request: {e}")
+            error_details = self._format_request_error(e)
+            self.error_label.config(text=f"Prompt Reload Error: {error_details}")
+        finally:
+            # Re-enable button
+            self.refresh_button.config(state=tk.NORMAL)
+
+    # --- Summary Controls ---
+    # --- In Summary Controls ---
+    def push_summary(self) -> bool: # Add return type hint
+        """Sends the summary text to the /message endpoint using PUSH_SUMMARY action. Returns True on success, False on failure."""
+        self._clear_messages()
+        # --- Get text from tk.Text widget ---
+        summary_text = self.summary_entry.get("1.0", tk.END).strip() # Get text and remove leading/trailing whitespace
+
+        if not summary_text:
+            self.error_label.config(text="Error: Summary cannot be empty to push.")
+            return False
+
+        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "sender": SENDER_NAME,
+            "recipient": RECIPIENT_NAME,
+            "message_type": "action_request",
+            "trigger_type": None,
+            "action_type": ACTION_PUSH_SUMMARY,
+            "payload": {"text": summary_text}
+        }
+        success = False # Flag for return value
+        try:
+            self.push_summary_button.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
+            response.raise_for_status()
+            self._handle_api_success_response(response, "Summary pushed")
+            success = True # Set flag on success
+
+        except requests.exceptions.Timeout:
+            self.error_label.config(text="Error: Summary push request timed out.")
+            print(f"Error: Timeout sending summary push to {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending summary push request: {e}")
+            error_details = self._format_request_error(e)
+            self.error_label.config(text=f"Summary Push Error: {error_details}")
+        finally:
+            self.push_summary_button.config(state=tk.NORMAL)
+            return success # Return the success flag
+
+    def pull_summary(self):
+        """Fetches the current summary via the /message POST endpoint using pull_summary trigger."""
+        self._clear_messages()
+        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "sender": SENDER_NAME, # Consistent name
+            "recipient": RECIPIENT_NAME, # Consistent name
+            "message_type": "trigger",
+            "trigger_type": ACTION_PULL_SUMMARY, # Defined constant
+            "action_type": None,
+            "payload": None
+        }
+
+        try:
+            # Disable button
+            self.pull_summary_button.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
+            response.raise_for_status()
+
+            summary_text = ""
+            try:
+                # response.json() correctly handles JSON strings -> Python strings
+                summary_text = response.json()
+                if not isinstance(summary_text, str):
+                    print(f"Warning: Expected string from summary pull, got {type(summary_text)}. Converting.")
+                    summary_text = str(summary_text)
+
+            except json.JSONDecodeError:
+                print(f"Warning: Response from {url} for summary pull was not valid JSON. Using raw text.")
+                summary_text = response.text
+                # Optional: Try stripping quotes if it's non-JSON but looks like '"text"'
+                if len(summary_text) >= 2 and summary_text.startswith('"') and summary_text.endswith('"'):
+                    summary_text = summary_text[1:-1]
+
+            self.summary_entry.delete("1.0", tk.END) # <<< Correct index for tk.Text
+            self.summary_entry.insert("1.0", summary_text)
+            self.status_label.config(text="Summary pulled successfully.")
+            print(f"Successfully pulled summary via POST to {url}")
+
+        except requests.exceptions.Timeout:
+            self.error_label.config(text="Error: Summary pull request timed out.")
+            print(f"Error: Timeout while POSTing for summary to {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error pulling summary via POST: {e}")
+            error_details = self._format_request_error(e)
+            self.error_label.config(text=f"Summary Pull Error: {error_details}")
+        finally:
+            # Re-enable button
+            self.pull_summary_button.config(state=tk.NORMAL)
+
+
+    # --- Message Controls (Main Window) ---
+
+    def _update_messages_status_and_buttons(self):
+        """Updates the message status label and enables/disables related buttons."""
+        if self.current_messages is None: # Check current_messages now
+            status_text = "Messages: None"
+            edit_state = tk.DISABLED
+            push_state = tk.DISABLED
+            clear_state = tk.DISABLED
+            summarize_state = tk.DISABLED
+        else:
+            # Use the length of the potentially modified current_messages list
+            count = len(self.current_messages) # <<< USE self.current_messages
+            modified_text = " (Modified)" if self.messages_modified_flag else ""
+            status_text = f"Messages: Loaded ({count}){modified_text}" # Show current count
+            edit_state = tk.NORMAL
+            push_state = tk.NORMAL
+            clear_state = tk.NORMAL
+            summarize_state = tk.NORMAL
+            # Disable push if modified? Maybe not, push pushes the kept state.
+
+        self.messages_status_label.config(text=status_text)
+        self.edit_messages_button.config(state=edit_state)
+        self.push_messages_button.config(state=push_state) # Main push button
+        self.clear_messages_button.config(state=clear_state)
+        self.summarize_button.config(state=summarize_state)
+        self.root.update_idletasks() # Ensure UI updates immediately
+
+    def pull_messages(self):
+        """Fetches messages, stores them, updates status, and opens/refreshes the editor.
+           Prompts if editor is open."""
+        self._clear_messages()
+
+        # --- Check if editor is open ---
+        # Prompt regardless of modification status if window exists
+        if self.messages_window and self.messages_window.winfo_exists():
+            response = messagebox.askyesno( # Changed to askyesno
+                "Confirm Pull",
+                "This will discard current editor content (if any) and pull fresh messages.\n\n"
+                "Proceed?",
+                parent=self.root
+            )
+
+            if response is True: # Yes - Discard/Close and Pull
+                print("Discarding editor content (if any) and proceeding with pull.")
+                # Force close the editor window
+                if self.messages_window and self.messages_window.winfo_exists():
+                    self.messages_window.destroy()
+                self.messages_window = None
+                self.messages_text_widget = None
+                self.push_close_button_ref = None
+                # Modified flag will be reset on successful pull below
+                # Allow the code below to execute...
+
+            else: # No or Closed Box
+                self.status_label.config(text="Pull operation cancelled.")
+                return # Cancel the pull operation
+
+        # --- If window wasn't open OR user chose "Yes" (Discard), proceed to pull ---
+
+        # --- Network Request Logic ---
+        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "sender": SENDER_NAME,
+            "recipient": RECIPIENT_NAME,
+            "message_type": "trigger",
+            "trigger_type": ACTION_PULL_CONVERSATION,
+            "action_type": None,
+            "payload": None
+        }
+
+        try:
+            # Disable button during request
+            self.pull_messages_button.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
+            response.raise_for_status()
+
+            # --- Process successful response ---
+            try:
+                messages = response.json()
+                if not isinstance(messages, list):
+                    self.error_label.config(text="Error: Expected list from server, got different format.")
+                    print(f"Unexpected response format pulling messages. Expected list, got {type(messages)}")
+                    self.clear_local_messages() # Reset state on bad data
+                    return # Stop processing here
+
+                # Success - Store messages
+                self.original_messages = copy.deepcopy(messages)
+                self.current_messages = messages
+                self.messages_modified_flag = False # Reset modified flag on successful pull
+                self.status_label.config(text=f"Messages pulled ({len(messages)}).")
+                print(f"Successfully pulled {len(messages)} messages")
+                self._update_messages_status_and_buttons() # Update count and buttons
+
+                # --- Refresh or Open Editor ---
+                if self.messages_window and self.messages_window.winfo_exists():
+                    # Window exists, just update its content and bring to front
+                    self._reformat_messages_display()
+                    self.messages_window.lift()
+                    self.messages_window.focus_force()
+                    # Reset modified state just in case reformat triggered something
+                    if self.messages_text_widget:
+                         self.messages_text_widget.edit_modified(False)
+                    self.messages_modified_flag = False
+                    self._update_messages_status_and_buttons()
+                else:
+                    # Window doesn't exist, open a new one
+                    self._display_messages()
+                # --- End Editor Refresh/Open ---
+
+            except json.JSONDecodeError:
+                self.error_label.config(text="Error: Could not parse server response (messages).")
+                print(f"Error: Invalid JSON in response pulling messages from {url}")
+                self.clear_local_messages() # Reset state on bad data
+
+        except requests.exceptions.Timeout:
+            self.error_label.config(text="Error: Messages pull request timed out.")
+            print(f"Error: Timeout while requesting messages from {url}")
+            # Don't clear local messages on timeout, might be temporary
+            self._update_messages_status_and_buttons() # Ensure button states are correct
+        except requests.exceptions.RequestException as e:
+            print(f"Error pulling messages: {e}")
+            error_details = self._format_request_error(e)
+            self.error_label.config(text=f"Messages Pull Error: {error_details}")
+            # Don't clear local messages on request error
+            self._update_messages_status_and_buttons() # Ensure button states are correct
+        finally:
+             # Re-enable button AFTER request finishes or fails
+             self.pull_messages_button.config(state=tk.NORMAL)
+             # Update status/buttons again in case state changed during error handling
+             self._update_messages_status_and_buttons()
+
+
+    def edit_messages(self):
+        """Opens the message editor window if messages are loaded."""
+        self._clear_messages()
+        if self.original_messages is None:
+            self.status_label.config(text="Pull messages first before editing.")
+            return
+
+        # Check if window exists and is withdrawn/iconified, bring it back
+        if self.messages_window and self.messages_window.winfo_exists():
+             if self.messages_window.state() == 'withdrawn' or self.messages_window.state() == 'iconic':
+                 self.messages_window.deiconify()
+             self.messages_window.lift()
+             self.messages_window.focus_force()
+        elif not self.messages_window: # Only open if not already open
+            self._display_messages()
+        else: # Window exists and is likely visible
+             self.messages_window.lift()
+             self.messages_window.focus_force()
+
+
+    def clear_local_messages(self):
+        """Clears messages stored locally in the UI."""
+        self._clear_messages()
+        if self.messages_window and self.messages_window.winfo_exists():
+            # Ask if modified? For simplicity now, just close.
+            # Could potentially integrate _handle_back_button logic here if needed.
+             self.messages_window.destroy()
+             self.messages_window = None
+             self.messages_text_widget = None
+
+        self.original_messages = None
+        self.current_messages = None
+        self.messages_modified_flag = False
+        self._update_messages_status_and_buttons()
+        self.status_label.config(text="Local messages cleared.")
+        print("Local messages cleared.")
+
+    def push_main_messages(self):
+        """Pushes the currently stored self.current_messages to the server.
+           Prompts to push summary if it exists."""
+        self._clear_messages()
+        if self.current_messages is None:
+            self.error_label.config(text="Error: No messages loaded to push.")
+            return
+        # Push button already handles modified flag warning (implicitly pushes kept state)
+
+        # --- Check for summary and ask initial question ---
+        summary_text = self.summary_entry.get("1.0", tk.END).strip() # <<< CORRECTED: Added arguments for tk.Text.get()
+        push_summary_flag = False
+        if summary_text:
+            push_summary_flag = messagebox.askyesno(
+                "Push Summary?",
+                "Summary field is not empty.\nPush the summary as well after pushing messages?",
+                parent=self.root # Relative to main window
+            )
+        # --- End NEW ---
+
+        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        payload_data = {
+            "sender": SENDER_NAME,
+            "recipient": RECIPIENT_NAME,
+            "message_type": "action_request",
+            "trigger_type": None,
+            "action_type": ACTION_PUSH_CONVERSATION,
+            "payload": {
+                "conversation": self.current_messages # Push the kept state
+            }
+        }
+
+        message_push_success = False # Track success
+        try:
+            self.push_messages_button.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(payload_data), timeout=15)
+            response.raise_for_status()
+
+            # --- Message Push Success ---
+            message_push_success = True
+            self._handle_api_success_response(response, f"Messages ({len(self.current_messages)}) pushed")
+            # Note: Pushing main messages doesn't change modified flag itself
+
+            # --- Handle potential summary push ---
+            if push_summary_flag:
+                print("Proceeding to push summary after successful message push...")
+                self.push_summary() # Call push_summary (it handles its own status/errors)
+            # --- End NEW ---
+
+        except requests.exceptions.Timeout:
+            self.error_label.config(text="Error: Message push request timed out.")
+            print(f"Error: Timeout sending message push to {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending message push request: {e}")
+            error_details = self._format_request_error(e)
+            self.error_label.config(text=f"Message Push Error: {error_details}")
+        finally:
+            # --- Handle summary push if message push FAILED ---
+            if not message_push_success and push_summary_flag:
+                 push_anyway = messagebox.askyesno(
+                     "Push Summary?",
+                     "Message push failed. Do you still want to try pushing the summary?",
+                     parent=self.root
+                 )
+                 if push_anyway:
+                     print("Attempting to push summary after message push failed...")
+                     self.push_summary()
+            # --- End NEW ---
+
+            # Re-enable button (only if messages still exist conceptually)
+            if self.current_messages is not None:
+                self.push_messages_button.config(state=tk.NORMAL)
+            self._update_messages_status_and_buttons() # Refresh status/button states
+
+
+    # --- Message Editor Window and Logic ---
+
+    def _parse_text_to_messages(self, text_content: str) -> list[dict[str, str]] | None:
+        """
+        Parses text content formatted with '--- ROLE: ---' separators
+        into a list of message dictionaries.
+
+        Args:
+            text_content: The raw string content from the text editor.
+
+        Returns:
+            A list of dictionaries [{'role': 'user'|'assistant', 'content': '...'}, ...]
+            or None if a parsing error occurs.
+        """
+        messages = []
+        # Normalize line endings and strip leading/trailing whitespace from the whole text
+        text_content = text_content.replace('\r\n', '\n').strip()
+
+        if not text_content:
+            return [] # Return empty list for empty input
+
+        # Split by the separator start "--- ". Filter out empty strings.
+        # Example: "--- USER: ---\nContent1\n\n--- ASSISTANT: ---\nContent2"
+        # becomes ["USER: ---\nContent1\n\n", "ASSISTANT: ---\nContent2"]
+        raw_message_blocks = [block for block in text_content.split("--- ") if block.strip()]
+
+        if not raw_message_blocks:
+            print("Parsing Error: No valid message blocks found. Check separators.")
+            # Optionally show error message here if needed
+            return None # Indicate error
+
+        for i, block in enumerate(raw_message_blocks):
+            # Split each block into the header line and the rest (content)
+            # Example: "USER: ---\nContent1\n\n" -> ["USER: ---", "Content1\n\n"]
+            # Example: "USER: ---"            -> ["USER: ---"]
+            parts = block.strip().split('\n', 1)
+            header_line = parts[0].strip()
+
+            # Validate the header format "ROLE: ---"
+            expected_end = ": ---"
+            if not header_line.endswith(expected_end):
+                print(f"Parsing Error: Invalid header format in block {i+1}. Expected 'ROLE: ---'. Got: '{header_line}'")
+                # Optionally show error message
+                return None # Indicate error
+
+            # Extract the ROLE part ("USER" or "ASSISTANT")
+            role_part = header_line[:-len(expected_end)].strip().upper() # Use upper for reliable comparison
+
+            # Map to the required lowercase role
+            if role_part == "USER":
+                role = "user"
+            elif role_part == "ASSISTANT":
+                role = "assistant"
+            else:
+                print(f"Parsing Error: Invalid role '{role_part}' found in block {i+1}. Expected 'USER' or 'ASSISTANT'.")
+                # Optionally show error message
+                return None # Indicate error
+
+            # Extract content: the part after the first newline, stripped of whitespace
+            # If there's no newline (e.g., "USER: ---"), content is empty
+            content = ""
+            if len(parts) > 1:
+                content = parts[1].strip() # Strip leading/trailing whitespace from content
+
+            messages.append({"role": role, "content": content})
+
+        return messages
+
+    def _display_messages(self):
+        """Displays messages in a separate Toplevel window for editing."""
+        if self.current_messages is None:
+            self.status_label.config(text="No messages to display.")
+            return
+
+        # Prevent multiple windows / Bring existing to front
+        if self.messages_window and self.messages_window.winfo_exists():
+            self.messages_window.lift()
+            self.messages_window.focus_force()
+            return
+
+        self.messages_window = tk.Toplevel(self.root)
+        self.messages_window.title("Edit Conversation Messages")
+        # Double the height from 500 to 1000
+        self.messages_window.geometry("750x1000") # <--- INCREASED HEIGHT
+        self.messages_window.protocol("WM_DELETE_WINDOW", self._handle_back_button)
+
+        # Create the main frame INSIDE the Toplevel window
+        main_frame = ttk.Frame(self.messages_window, padding="10") # <<< CRITICAL: Parent is self.messages_window
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- Button Frame --- (Packed at the bottom of main_frame)
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+
+        back_button = ttk.Button(button_frame, text="Back", command=self._handle_back_button)
+        back_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        keep_button = ttk.Button(button_frame, text="Keep Changes", command=self._keep_message_changes)
+        keep_button.pack(side=tk.LEFT, padx=5, pady=5)
+        undo_button = ttk.Button(button_frame, text="Undo All Changes", command=self._undo_all_message_changes)
+        undo_button.pack(side=tk.LEFT, padx=5, pady=5)
+        push_close_button = ttk.Button(button_frame, text="Push & Close", command=self._push_and_close_messages)
+        push_close_button.pack(side=tk.LEFT, padx=5, pady=5)
+        self.push_close_button_ref = push_close_button
+
+        # --- Messages Frame --- (Packed above button_frame in main_frame)
+        messages_frame = ttk.Frame(main_frame)
+        messages_frame.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(messages_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.messages_text_widget = tk.Text(
+            messages_frame, # Parent is messages_frame
+            wrap=tk.WORD,
+            yscrollcommand=scrollbar.set,
+            undo=True,
+            font=self.editor_font
+        )
+        self.messages_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.messages_text_widget.yview)
+
+        # --- Define and Configure Tags --- <<< NEW
+        self.messages_text_widget.tag_configure(
+            "bold_caps",
+            font=tkfont.Font(family=self.editor_font.cget('family'), size=self.editor_font.cget('size'), weight='bold')
+        )
+        # --- End Define Tags ---
+
+
+        # --- Modification Tracking ---
+        self.messages_text_widget.bind("<<Modified>>", self._on_message_text_modified)
+
+        # --- Populate Initial Content ---
+        self._reformat_messages_display() # Will now use the new format
+
+
+    def _reformat_messages_display(self):
+        """Helper to clear and populate the text widget from self.current_messages."""
+        if not self.messages_text_widget or not self.messages_window or not self.messages_window.winfo_exists():
+            return # Safety check
+
+        # --- Temporarily disable binding --- Doesnt seem reliable enough
+        # self.messages_text_widget.unbind("<<Modified>>")
+
+        self.messages_text_widget.config(state=tk.NORMAL) # Ensure editable
+        self.messages_text_widget.delete(1.0, tk.END)
+
+        if self.current_messages is not None:
+            for i, msg in enumerate(self.current_messages):
+                role_upper = msg.get('role', 'unknown').upper() # Get role and uppercase
+                content = msg.get('content', '').strip() # <<< Strip content here for cleaner display
+
+                # --- NEW FORMAT ---
+                separator_start = "--- "
+                separator_end = ": ---\n"
+                content_body = f"{content}\n\n" # Actual content starts here, add spacing
+
+                # Insert the start of the separator
+                self.messages_text_widget.insert(tk.END, separator_start)
+                # Insert the role with the bold_caps tag
+                self.messages_text_widget.insert(tk.END, f"{role_upper}", ("bold_caps",))
+                # Insert the end of the separator
+                self.messages_text_widget.insert(tk.END, separator_end)
+                # Insert the content body
+                self.messages_text_widget.insert(tk.END, content_body)
+                # --- END NEW FORMAT ---
+
+        self.messages_text_widget.config(state=tk.NORMAL) # Ensure state is normal
+        # Crucially, reset the widget's internal flag *after* inserting text
+        self.messages_text_widget.edit_modified(False)
+
+        # --- Re-enable binding ---
+        # self.messages_text_widget.bind("<<Modified>>", self._on_message_text_modified)
+
+        # Ensure cursor is at the start, not end
+        self.messages_text_widget.mark_set("insert", "1.0")
+        self.messages_text_widget.see("1.0")
+        # Reset undo stack after programmatic change
+        self.messages_text_widget.edit_reset()
+
+
+    def _on_message_text_modified(self, event=None):
+        """Callback when the message text widget is modified."""
+        # Check if the widget still exists
+        if not self.messages_text_widget or not self.messages_text_widget.winfo_exists():
+            return
+
+        # The <<Modified>> event fires *before* the modification flag is set,
+        # and *again* after it's set to True. We only care when it's about to be True.
+        # So, we check the flag *inside* the callback. If it's already True, ignore.
+        # Then, set our app's flag and reset the widget's flag.
+
+        try:
+            # Check the widget's internal flag
+            is_modified = self.messages_text_widget.edit_modified()
+
+            if is_modified:
+                # This means an actual user edit likely occurred.
+                self.messages_modified_flag = True # Set our application flag
+                self._update_messages_status_and_buttons() # Update main UI status
+
+                # Reset the widget's internal flag so this callback doesn't
+                # immediately fire again and only fires once per edit sequence.
+                self.messages_text_widget.edit_modified(False)
+
+        except tk.TclError:
+             # Handle cases where the widget might be destroyed during the callback
+             print("TclError caught in _on_message_text_modified, likely widget destroyed.")
+
+
+    def _keep_message_changes(self) -> bool:
+        """Parses text, updates current_messages if valid, resets modified flag."""
+        if not self.messages_text_widget: return False
+        self._clear_messages() # Clear main window status
+
+        text_content = self.messages_text_widget.get(1.0, tk.END)
+        parsed_messages = self._parse_text_to_messages(text_content)
+
+        if parsed_messages is not None:
+            self.current_messages = parsed_messages
+            self.messages_modified_flag = False
+            if self.messages_text_widget and self.messages_text_widget.winfo_exists():
+                 self.messages_text_widget.edit_modified(False) # Reset widget flag
+            self._update_messages_status_and_buttons()
+            self.status_label.config(text="Changes kept.") # Update main status
+            print("Message changes kept.")
+            return True
+        else:
+            # Show error in the messages window
+            if self.messages_window and self.messages_window.winfo_exists():
+                 messagebox.showerror("Parsing Error",
+                                      "Could not parse the messages. Please check the format:\n"
+                                      "- Each message starts with '--- <ROLE>: ---'\n"
+                                      "- <ROLE> is either 'USER' or 'ASSISTANT'\n"
+                                      "- <CONTENT> is the message content\n"
+                                      "Changes not kept.",
+                                      parent=self.messages_window) # Make modal to editor
+            else: # Fallback if window somehow closed
+                 self.error_label.config(text="Parsing Error: Could not save message changes.")
+            return False
+
+    def _undo_all_message_changes(self):
+        """Resets the editor display to the initially pulled messages."""
+        self._clear_messages()
+        if self.original_messages is None:
+             if self.messages_window and self.messages_window.winfo_exists():
+                  messagebox.showwarning("Undo Error", "No original messages found to undo to.", parent=self.messages_window)
+             return
+
+        # Reset current_messages from original
+        self.current_messages = copy.deepcopy(self.original_messages)
+        # Update the display
+        self._reformat_messages_display() # This handles clearing/populating/resetting flag
+
+        # Ensure flags and status are correct
+        self.messages_modified_flag = False
+        self._update_messages_status_and_buttons()
+        self.status_label.config(text="Changes reverted to last pulled state.")
+        print("Message changes undone.")
+
+
+    def _handle_back_button(self):
+        """Handles closing the message editor window, prompting if modified."""
+        close_window = True
+        if self.messages_modified_flag:
+            # Prompt within the messages window
+            response = messagebox.askyesnocancel("Unsaved Changes",
+                                                 "Keep the current changes before closing?",
+                                                 parent=self.messages_window)
+            if response is True: # Yes
+                keep_success = self._keep_message_changes()
+                if not keep_success:
+                    close_window = False # Don't close if keeping failed (e.g., parse error)
+            elif response is False: # No
+                # Discard changes - just proceed to close
+                self.messages_modified_flag = False # Reset flag as we are discarding
+                self._update_messages_status_and_buttons()
+            else: # Cancel
+                close_window = False
+
+        if close_window:
+            if self.messages_window and self.messages_window.winfo_exists():
+                 self.messages_window.destroy()
+            self.messages_window = None
+            self.messages_text_widget = None
+            # Optional: Update status? Usually not needed if flags handled correctly.
+
+    # --- In Message Editor Window and Logic ---
+    def _push_and_close_messages(self):
+        """Parses editor, potentially asks about summary, pushes messages,
+           potentially pushes summary, and closes window only if messages push succeeds."""
+        if not self.messages_text_widget: return
+        self._clear_messages()
+
+        text_content = self.messages_text_widget.get(1.0, tk.END)
+        parsed_messages = self._parse_text_to_messages(text_content)
+
+        if parsed_messages is None:
+            # Show error and stop (same as before)
+            if self.messages_window and self.messages_window.winfo_exists():
+                 messagebox.showerror("Parsing Error", "Could not parse messages for pushing...", parent=self.messages_window)
+            else: self.error_label.config(text="Parsing Error: Could not push messages.")
+            return
+
+        # --- Check for summary and ask initial question ---
+        summary_text = self.summary_entry.get("1.0", tk.END).strip() # <<< CORRECTED: Added arguments for tk.Text.get()
+        push_summary_flag = False
+        if summary_text:
+            if self.messages_window and self.messages_window.winfo_exists():
+                push_summary_flag = messagebox.askyesno(
+                    "Push Summary?",
+                    "Summary field is not empty.\\nPush the summary as well after pushing messages?",
+                    parent=self.messages_window
+                )
+            else: return # Should not happen, but safety check
+
+        # --- Proceed with Message API Call ---
+        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
+        headers = {"Content-Type": "application/json"}
+        payload_data = {
+            "sender": SENDER_NAME,
+            "recipient": RECIPIENT_NAME,
+            "message_type": "action_request",
+            "trigger_type": None,
+            "action_type": ACTION_PUSH_CONVERSATION, # Corrected action type
+            "payload": {"conversation": parsed_messages}
+        }
+
+        message_push_success = False
+        try:
+            # Disable button during request
+            if hasattr(self, 'push_close_button_ref') and self.push_close_button_ref:
+                 self.push_close_button_ref.config(state=tk.DISABLED)
+            self.root.update_idletasks()
+
+            response = requests.post(url, headers=headers, data=json.dumps(payload_data), timeout=15)
+            response.raise_for_status()
+
+            # --- Message Push Success ---
+            message_push_success = True
+            self.current_messages = parsed_messages
+            self.messages_modified_flag = False
+            self._update_messages_status_and_buttons()
+            self._handle_api_success_response(response, f"Messages ({len(self.current_messages)}) pushed")
+
+            # --- Handle potential summary push ---
+            summary_pushed_or_not_attempted = True # Assume success if not attempted
+            if push_summary_flag:
+                print("Proceeding to push summary after successful message push...")
+                # Call push_summary and check its return value (optional check)
+                summary_pushed_or_not_attempted = self.push_summary()
+                if not summary_pushed_or_not_attempted:
+                     print("Summary push failed after message push succeeded.")
+                     # Decide if you want to show another error or just rely on push_summary's message
+
+            # --- Close window ONLY if message push succeeded ---
+            if self.messages_window and self.messages_window.winfo_exists():
+                self.messages_window.destroy()
+            self.messages_window = None
+            self.messages_text_widget = None
+            self.push_close_button_ref = None # Clear reference
+
+        except requests.exceptions.Timeout:
+            error_msg = "Error: Message push (from editor) timed out."
+            print(error_msg)
+            if self.messages_window and self.messages_window.winfo_exists():
+                 messagebox.showerror("Push Error", error_msg, parent=self.messages_window)
+            else: self.error_label.config(text=error_msg)
+        except requests.exceptions.RequestException as e:
+            error_details = self._format_request_error(e)
+            print(f"Error sending message push (from editor) request: {e}")
+            error_msg = f"Message Push Error: {error_details}"
+            if self.messages_window and self.messages_window.winfo_exists():
+                 messagebox.showerror("Push Error", error_msg, parent=self.messages_window)
+            else: self.error_label.config(text=error_msg)
+
+        finally:
+            # --- Handle summary push if message push FAILED ---
+            if not message_push_success and push_summary_flag:
+                 if self.messages_window and self.messages_window.winfo_exists():
+                     push_anyway = messagebox.askyesno(
+                         "Push Summary?",
+                         "Message push failed. Do you still want to try pushing the summary?",
+                         parent=self.messages_window
+                     )
+                     if push_anyway:
+                         print("Attempting to push summary after message push failed...")
+                         self.push_summary()
+                 # Do NOT close window here
+
+            # Re-enable button if window still exists
+            if hasattr(self, 'push_close_button_ref') and self.push_close_button_ref and self.push_close_button_ref.winfo_exists():
+                 self.push_close_button_ref.config(state=tk.NORMAL)
+            self._update_messages_status_and_buttons() # Refresh status
+
+    # --- Placeholder for Summarize Messages --- <-- ADDED
+    def _summarize_messages_placeholder(self): # <-- ADDED
+        """Placeholder function for the Summarize Messages button.""" # <-- ADDED
+        print("Placeholder: Summarize Messages button clicked.") # <-- ADDED
+        self._clear_messages() # <-- ADDED
+        self.status_label.config(text="Summarize functionality not yet implemented.") # <-- ADDED
+    # --- End Placeholder --- <-- ADDED
+
+    # --- Utility Methods ---
+    def _format_request_error(self, e: requests.exceptions.RequestException) -> str:
+        """Formats RequestException details for display."""
+        error_details = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            status = e.response.status_code
+            try:
+                # Try to get JSON error message from response body
+                body_json = e.response.json()
+                if isinstance(body_json, dict) and 'detail' in body_json:
+                    body = body_json['detail']
+                else:
+                    body = e.response.text[:200] # Limit length
+            except json.JSONDecodeError:
+                 body = e.response.text[:200] # Limit length if not JSON
+            error_details += f" | Status: {status} | Body: {body}..."
+        return error_details
+
+    def _handle_api_success_response(self, response: requests.Response, base_success_message: str):
+        """Parses common success responses (JSON dict/str, 204) and updates status label."""
+        status_text = f"{base_success_message} successfully"
+        try:
+            if response.status_code == 204: # No Content
+                status_text += " (No Content)"
+                print(f"{base_success_message}. Status: 204 No Content")
+            elif response.content:
+                 response_data = response.json()
+                 if isinstance(response_data, str):
+                      status_text = response_data # Use server message directly
+                      print(f"{base_success_message}, Response: {response_data}")
+                 elif isinstance(response_data, dict):
+                      msg = response_data.get('message', status_text)
+                      status_text = msg
+                      print(f"{base_success_message}, Response: {response_data}")
+                 else:
+                      status_text += " (Unknown JSON Format)"
+                      print(f"{base_success_message}. Response type: {type(response_data)}")
+            else: # Empty body, not 204
+                 status_text += " (Empty Response Body)"
+                 print(f"{base_success_message}. Status: {response.status_code}")
+
+            self.status_label.config(text=status_text)
+
+        except json.JSONDecodeError:
+            status_text += " (non-JSON response)"
+            self.status_label.config(text=status_text)
+            print(f"{base_success_message}. Status: {response.status_code}, Non-JSON Response: {response.text[:100]}...")
+        except Exception as e: # Catch unexpected errors during handling
+             print(f"Error handling success response: {e}")
+             self.error_label.config(text="Error processing server response.")
+
+
+# --- Main Application Start ---
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = VoiceSelectorApp(root, voices)
+    root.mainloop()
+```
+
+## Relevant code from the conversation script:
+```python
+class TriggerType(Enum):
+REFRESH_ALL_PROMPTS = "refresh_all_prompts"
+CLEAR_CONTEXT = "clear_context"
+RESTART_AGENT = "restart_agent"
+PULL_CONVERSATION = "pull_conversation"
+PULL_SUMMARY = "pull_summary"
+# Andere directe triggers zonder payload
+
+class ActionType(Enum):
+    REFRESH_SPECIFIC_PROMPT = "refresh_specific_prompt"
+    UPDATE_PLACEHOLDERS = "update_placeholders"
+    PUSH_PLACEHOLDER = "push_placeholder"
+    PUSH_SUMMARY = "push_summary"
+    PUSH_CONVERSATION = "push_conversation"
+    CHANGE_VOICE = "change_voice"
+    # Complexere acties met payload
+
+@app.post('/update')
+async def update_content(note: NoteData):
+    if note.title and note.content:
+        await communication_manager.update_obsidian_content(note.title, note.content)
+        # return {"message": f"{note.title} succesvol ontvangen"}
+        print (f"'{note.title}' succesvol ontvangen")
+    
+    else:
+        raise HTTPException(status_code=400, detail="Titel of inhoud ontbreekt")
+
+
+@app.post('/message')
+async def handle_message(message: Message):
+    if message.action_type:
+        return await communication_manager.handle_action(message)
+    elif message.trigger_type:
+        return await communication_manager.handle_trigger(message)
+    
+
+@app.post('/update_voice')
+async def update_voice(request: VoiceUpdateRequest):
+    update_voice_id(request.voice_id, request.voice_name)
+    await generate_model_audio_segments()
+    return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
+
+@app.post('/reload_default_prompts')
+async def reload_default_prompts(refresh: DefaultPrompts):
+    if refresh.system_prompt and refresh.dynamic_context:
+        await prompt_manager.reload_default_prompts(refresh.system_prompt, refresh.dynamic_context)
+        print ("Verzoek tot reload succesvol ontvangen")
+        return {"message": "Verzoek tot reload succesvol ontvangen"}
+        
+    else:
+        raise HTTPException(status_code=400, detail="Bericht incompleet")
+
+class CommunicationManager:
+    def __init__(self):
+        self.messages: list[dict[str, str]] = []
+        self.obsidian_content: str = ""
+        self.obsidian_title: str = ""
+        self.midi_details: str = ""
+        self._lock = asyncio.Lock()
+        self.summary: str = ""
+
+    async def handle_action(self, message: Message) -> str:
+        async with self._lock:
+            if message.action_type == ActionType.PUSH_SUMMARY:
+                if message.payload:
+                    self.summary = message.payload.get("text", "")
+                    print(f"CommunicationManager: Summary updated to: '{self.summary}'")
+                    return "summary updated"
+                else:
+                    print("CommunicationManager: Warning - Received UPDATE_SUMMARY action but payload was missing.")
+                    return "warning - payload was missing"
+
+            if message.action_type == ActionType.PUSH_CONVERSATION:
+                if message.payload:
+                    self.messages = message.payload.get("conversation", [])
+                    print("CommunicationManager: Conversation updated ;-)")
+                    return "conversation updated"
+                else:
+                    print("CommunicationManager: Warning - Received UPDATE_CONVERSATION action but payload was missing.")
+                    return "warning - payload was missing"
+
+    async def handle_trigger(self, message: Message):
+        async with self._lock:
+            if message.trigger_type == TriggerType.PULL_CONVERSATION:
+                return self.messages
+            if message.trigger_type == TriggerType.PULL_SUMMARY:
+                return self.summary
+
+    async def get_summary(self) -> str:
+        async with self._lock:
+            return self.summary
+
+    async def load_summary(self, summary: str) -> None:
+        async with self._lock:
+            self.summary = summary
+
+    async def add_user_message(self, user_input: str) -> None:
+        async with self._lock:
+            self.messages.append({"role": "user", "content": user_input})
+
+    async def add_assistant_message(self, assistant_output: str) -> None:
+        async with self._lock:
+            self.messages.append({"role": "assistant", "content": assistant_output})
+
+    async def get_messages(self) -> list[dict[str, str]]:
+        async with self._lock:
+            return list(self.messages)
+
+    async def set_messages(self, new_messages: list[dict[str, str]]) -> None:
+        async with self._lock:
+            self.messages = new_messages
+
+    async def update_obsidian_content(self, title: str, content: str) -> None:
+        async with self._lock:
+            self.obsidian_title = title
+            self.obsidian_content = content
+            note_received.set()
+
+    async def update_midi_details(self, midi_details: str) -> None:
+        async with self._lock:
+            self.midi_details = midi_details
+
+    async def process_incoming_message(self) -> None:
+        async with self._lock:
+            last_message = next((msg for msg in reversed(self.messages) if msg['role'] in ['user', 'assistant']), None)
+
+            if self.obsidian_content and last_message:
+                last_message['content'] += f"\n\n(Obsidian Note: {self.obsidian_title})\n{self.obsidian_content}"
+                print(f"Obsidian note added to last message: {self.obsidian_title}")
+                self.obsidian_content = ""
+                self.obsidian_title = ""
+
+            if self.midi_details and last_message:   
+                last_message['content'] += f"\n\nMIDI Details:\n{self.midi_details}"
+                print(f"MIDI details added to last message: {self.midi_details}")
+                self.midi_details = ""
+            # Clipboard
+            clipboard_text = await asyncio.to_thread(pyperclip.paste)
+            if clipboard_text.strip() and last_message:
+                last_message['content'] += f"\n\n(Pasted clipboard content:)\n{clipboard_text.strip()}"
+                await asyncio.to_thread(pyperclip.copy, "")  # Leegmaken
+                print("Clipboard content added to last message.")
+
+    def get_messages_sync(self) -> list[dict[str, str]]:
+        return self.messages.copy()
+
+    def get_summary_sync(self) -> str:
+        return self.summary
+
+    def set_messages_sync(self, new_messages: list[dict[str, str]]) -> None:
+        self.messages = new_messages
+
+    def load_summary_sync(self, summary: str) -> None:
+        self.summary = summary
+
+
+class EventManager:
+    def __init__(self, db_path="event_store.db"):
+        self.db_path = db_path
+        self.lock = Lock()
+        self._init_db()
+
+    def _init_db(self):
+        with connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT UNIQUE,
+                    type TEXT,
+                    content TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            # Settings-tabel toevoegen
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT)""")
+            conn.commit()
+
+    def save_event(self, event_type: str, content: dict, event_id: str = None):
+        if event_id is None:
+            event_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        content_json = orjson.dumps(content).decode('utf-8')
+        with self.lock, connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO events (event_id, type, content) VALUES (?, ?, ?)",
+                (event_id, event_type, content_json))
+            conn.commit()
+        return event_id
+
+    def get_latest_event(self, event_type: str):
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT event_id, content FROM events WHERE type = ? ORDER BY created_at DESC LIMIT 1",
+                (event_type,))
+            row = cursor.fetchone()
+        if row:
+            event_id, content_json = row
+            content = orjson.loads(content_json)
+            return event_id, content
+        return None, None
+
+    def get_event_by_id(self, event_id: str):
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT type, content FROM events WHERE event_id = ?",
+                (event_id,))
+            row = cursor.fetchone()
+        if row:
+            event_type, content_json = row
+            content = orjson.loads(content_json)
+            return event_type, content
+        return None, None
+    
+    def set_setting(self, key: str, value: str):
+        with self.lock, connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value))
+            conn.commit()
+
+    def get_setting(self, key: str) -> str | None:       
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,))
+            row = cursor.fetchone()
+        if row:
+            return row[0]
+        return None
+    
+
+PROMPT_DB_PATH = 'prompt_store.db'
+
+class PromptManager:
+    def __init__(self, db_path=PROMPT_DB_PATH):
+        self.db_path = db_path
+        self.system_prompt = ""
+        self.dynamic_context = []
+
+    # --- Synchronous methods for hotkey handlers ---
+    def get_system_prompt_sync(self, prompt_name: str) -> str:
+        try:
+            with sqlite3.connect(self.db_path) as db:
+                cursor = db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = cursor.fetchone()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                return (content
+                        .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                        .replace("{local_time}", now.strftime("%H:%M:%S")))
+            else:
+                logging.error(f"No system prompt found in DB for '{prompt_name}'")
+                return f"System prompt '{prompt_name}' not found."
+        except Exception as e:
+            logging.error(f"DB error in get_system_prompt_sync: {e}")
+            return "Error retrieving system prompt."
+
+    def get_dynamic_context_sync(self, prompt_name="dynamic_context", summary="") -> list:
+        try:
+            with sqlite3.connect(self.db_path) as db:
+                cursor = db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = cursor.fetchone()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                content = (content
+                           .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                           .replace("{local_time}", now.strftime("%H:%M:%S"))
+                           .replace("{summary}", summary))
+                return [
+                    {"role": "user", "content": content},
+                    {"role": "assistant", "content": "OK!"}
+                ]
+            else:
+                logging.error(f"No dynamic context found in DB for '{prompt_name}'")
+                return []
+        except Exception as e:
+            logging.error(f"DB error in get_dynamic_context_sync: {e}")
+            return []
+
+    def load_default_prompts_sync(self):
+        self.system_prompt = self.get_system_prompt_sync("system_prompt")
+        self.dynamic_context = self.get_dynamic_context_sync("dynamic_context")
+
+    # --- Asynchronous methods for FastAPI endpoints ---
+    async def get_system_prompt(self, prompt_name: str) -> str:
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = await cursor.fetchone()
+                await cursor.close()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                return (content
+                        .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                        .replace("{local_time}", now.strftime("%H:%M:%S")))
+            else:
+                logging.error(f"No system prompt found async for '{prompt_name}'")
+                return f"System prompt '{prompt_name}' not found."
+        except Exception as e:
+            logging.error(f"DB error in get_system_prompt (async): {e}")
+            return "Error retrieving system prompt."
+
+    async def get_dynamic_context(self, prompt_name="dynamic_context", summary="") -> list:
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                row = await cursor.fetchone()
+                await cursor.close()
+            if row:
+                content = row[0]
+                now = datetime.now()
+                content = (content
+                           .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                           .replace("{local_time}", now.strftime("%H:%M:%S"))
+                           .replace("{summary}", summary))
+                return [
+                    {"role": "user", "content": content},
+                    {"role": "assistant", "content": "OK!"}
+                ]
+            else:
+                logging.error(f"No dynamic context found async for '{prompt_name}'")
+                return []
+        except Exception as e:
+            logging.error(f"DB error in get_dynamic_context (async): {e}")
+            return []
+
+    async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str, summary=""):
+        self.system_prompt = await self.get_system_prompt(new_system_prompt)
+        self.dynamic_context = await self.get_dynamic_context(new_dynamic_context, summary=summary)
+
+    def set_default_system_prompt(self, new_system_prompt: str):
+        self.system_prompt = new_system_prompt
+
+    def set_default_dynamic_context(self, new_dynamic_context: list):
+        self.dynamic_context = new_dynamic_context
+
+    def get_current_system_prompt(self):
+        return self.system_prompt
+
+    def get_current_dynamic_context(self):
+        return self.dynamic_context
+ ```

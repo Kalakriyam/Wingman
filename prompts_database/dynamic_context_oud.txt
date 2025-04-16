@@ -6,13 +6,15 @@
 
 
 ## Doel van de huidige conversatie:
+Voice UI uitbreiden met de mogelijkheid om prompts op te halen uit het conversatiescript, en ze te bewerken, net zoals nu al met de messages en de conversation summary kan.
 {summary}
 
 
 ## Huidige focus:
-Het stappenplan zo herschrijven dat ik optimaal `in flow` blijf.
-Ook al wordt het stappenplan er mogelijk licht onlogisch door, ik heb nu een paar voelbare vooruitgangen nodig.
-
+de code van voice UI begrjipen
+dan het paneel uitbreiden waar nu alleen de knop 'push prompt refresh' in staat.
+goede aansluiting maken met het conversatiescript.
+{current_focus}
 
 ---
 
