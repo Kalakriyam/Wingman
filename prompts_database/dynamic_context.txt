@@ -11,9 +11,8 @@ Voice UI uitbreiden met de mogelijkheid om prompts op te halen uit het conversat
 
 
 ## Huidige focus:
-- de code van voice UI begrjipen
-- dan het paneel uitbreiden waar nu alleen de knop 'push prompt refresh' in staat.
-- goede aansluiting maken met het conversatiescript.
+- GEDAAN: Het paneel uitbreiden waar nu alleen de knop 'push prompt refresh' in staat.
+- De placeholder functies functioneel maken (let op goede aansluiting maken met het conversatiescript).
 {current_focus}
 
 
@@ -140,9 +139,22 @@ class VoiceSelectorApp:
         self.separator1 = ttk.Separator(self.main_frame, orient='horizontal')
         self.separator1.pack(fill='x', pady=10)
 
-        # --- Prompt Refresh Button ---
-        self.refresh_button = ttk.Button(self.main_frame, text="Push Prompt Refresh", command=self.reload_prompts) # Will use default style
+        # --- Prompts Control Section ---
+        self.prompts_control_frame = ttk.Frame(self.main_frame)
+        self.prompts_control_frame.pack(pady=(0, 5))
+
+        self.refresh_button = ttk.Button(self.prompts_control_frame, text="Reload Default Prompts", command=self.reload_prompts) # Will use default style
         self.refresh_button.pack(pady=(0, 5))
+
+        self.pull_prompts_button = ttk.Button(self.prompts_control_frame, text="Pull Prompts", command=self.pull_prompts)
+        self.pull_prompts_button.pack(side=tk.LEFT, padx=5)
+
+        self.edit_prompts_button = ttk.Button(self.prompts_control_frame, text="Edit Prompts", command=self.edit_prompts, state=tk.DISABLED)
+        self.edit_prompts_button.pack(side=tk.LEFT, padx=5)
+
+        self.push_prompts_button = ttk.Button(self.prompts_control_frame, text="Push Prompts", command=self.push_prompts, state=tk.DISABLED)
+        self.push_prompts_button.pack(side=tk.LEFT, padx=5)
+        
 
         # --- Separator for Messages ---
         self.separator2 = ttk.Separator(self.main_frame, orient='horizontal')
@@ -1171,6 +1183,30 @@ async def reload_default_prompts(refresh: DefaultPrompts):
         
     else:
         raise HTTPException(status_code=400, detail="Bericht incompleet")
+
+@app.post("/prompts")
+async def handle_prompts(message: PromptsMessage):
+    # PULL: Ophalen van beide prompts
+    if message.trigger_type == "pull_prompts":
+        system = await prompt_manager.get_system_prompt("system_prompt")
+        dynamic = await prompt_manager.get_dynamic_context("dynamic_context")
+        return {
+            "system_prompt": system,
+            "dynamic_context": dynamic}
+
+    # PUSH: Wegschrijven van beide prompts
+    elif message.action_type == "push_prompts":
+        if not message.payload:
+            raise HTTPException(status_code=400, detail="Payload ontbreekt")
+        system = message.payload.get("system_prompt", "")
+        dynamic = message.payload.get("dynamic_context", [])
+        await prompt_manager.set_default_system_prompt(system)
+        await prompt_manager.set_default_dynamic_context(dynamic)
+        return {"message": "Prompts updated"}
+
+    # Ongeldige trigger/actie
+    else:
+        raise HTTPException(status_code=400, detail="Ongeldige trigger of actie")
 
 class CommunicationManager:
     def __init__(self):

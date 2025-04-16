@@ -1594,8 +1594,8 @@ async def obsidian_agent():
 
 
     logging.info("\nStarting idea event listener...")
-    obsidian_agent_client = AsyncCerebras(api_key=CEREBRAS_API_KEY)
-    # obsidian_agent_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    # obsidian_agent_client = AsyncCerebras(api_key=CEREBRAS_API_KEY)
+    obsidian_agent_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     while True:
         # Wait for transcription using obsidian_agent method
         user_input = await whisper_transcriber.transcript_to_obsidian_agent()
@@ -1620,26 +1620,26 @@ async def obsidian_agent():
         
         messages_to_agent = [{"role": "system", "content": obsidian_agent_prompt}] + contextualised_user_input
         
-        # agent_response = await obsidian_agent_client.chat.completions.create(
-        #     model="gpt-4o-2024-11-20",
-        #     messages=messages_to_agent,
-        #     tools=[obsidian_notes_tool, obsidian_command_tool],
-        #     tool_choice="auto",
-        #     max_tokens=2000,
-        #     temperature=0,
-        #     top_p=0.1,
-        #     stream=True
-        #     )
         agent_response = await obsidian_agent_client.chat.completions.create(
-                model="llama-3.3-70b",
-                messages=messages_to_agent,
-                tools=[obsidian_notes_tool, obsidian_command_tool],
-                tool_choice="auto",
-                max_tokens=2500,
-                temperature=0,
-                top_p=0,
-                stream=True
+            model="gpt-4.1-mini",
+            messages=messages_to_agent,
+            tools=[obsidian_notes_tool, obsidian_command_tool],
+            tool_choice="auto",
+            max_tokens=2000,
+            temperature=0,
+            top_p=0.1,
+            stream=True
             )
+        # agent_response = await obsidian_agent_client.chat.completions.create(
+        #         model="llama-3.3-70b",
+        #         messages=messages_to_agent,
+        #         tools=[obsidian_notes_tool, obsidian_command_tool],
+        #         tool_choice="auto",
+        #         max_tokens=2500,
+        #         temperature=0,
+        #         top_p=0,
+        #         stream=True
+        #     )
 
         print("\r>>>>>>  Receiving...  <<<<<<", end="")
 
