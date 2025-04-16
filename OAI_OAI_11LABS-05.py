@@ -174,6 +174,35 @@ class Message(BaseModel):
     payload: Optional[dict[str, Any]]
     # timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
+class PromptsMessage(BaseModel):
+    trigger_type: Optional[str] = None
+    action_type: Optional[str] = None
+    payload: Optional[dict[str, Any]] = None
+
+@app.post("/prompts")
+async def handle_prompts(message: PromptsMessage):
+    # PULL: Ophalen van beide prompts
+    if message.trigger_type == "pull_prompts":
+        system = await prompt_manager.get_system_prompt("system_prompt")
+        dynamic = await prompt_manager.get_dynamic_context("dynamic_context")
+        return {
+            "system_prompt": system,
+            "dynamic_context": dynamic}
+
+    # PUSH: Wegschrijven van beide prompts
+    elif message.action_type == "push_prompts":
+        if not message.payload:
+            raise HTTPException(status_code=400, detail="Payload ontbreekt")
+        system = message.payload.get("system_prompt", "")
+        dynamic = message.payload.get("dynamic_context", [])
+        await prompt_manager.set_default_system_prompt(system)
+        await prompt_manager.set_default_dynamic_context(dynamic)
+        return {"message": "Prompts updated"}
+
+    # Ongeldige trigger/actie
+    else:
+        raise HTTPException(status_code=400, detail="Ongeldige trigger of actie")
+
 @app.post('/update')
 async def update_content(note: NoteData):
     if note.title and note.content:
@@ -2158,6 +2187,33 @@ class PromptManager:
     async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str, summary=""):
         self.system_prompt = await self.get_system_prompt(new_system_prompt)
         self.dynamic_context = await self.get_dynamic_context(new_dynamic_context, summary=summary)
+
+    async def set_default_system_prompt(self, new_system_prompt: str):
+        self.system_prompt = new_system_prompt
+        # Optioneel: ook direct in de database opslaan
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "UPDATE prompts SET content = ? WHERE prompt_name = ?",
+                    (new_system_prompt, "system_prompt"))
+                await db.commit()
+        except Exception as e:
+            logging.error(f"DB error in set_default_system_prompt (async): {e}")
+
+    async def set_default_dynamic_context(self, new_dynamic_context: list):
+        self.dynamic_context = new_dynamic_context
+        # Optioneel: ook direct in de database opslaan
+        try:
+            # Sla op als string (bijvoorbeeld JSON)
+            import json
+            dynamic_context_str = json.dumps(new_dynamic_context)
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "UPDATE prompts SET content = ? WHERE prompt_name = ?",
+                    (dynamic_context_str, "dynamic_context"))
+                await db.commit()
+        except Exception as e:
+            logging.error(f"DB error in set_default_dynamic_context (async): {e}")
 
     def set_default_system_prompt(self, new_system_prompt: str):
         self.system_prompt = new_system_prompt
