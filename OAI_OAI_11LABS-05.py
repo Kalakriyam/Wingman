@@ -174,6 +174,15 @@ class Message(BaseModel):
     payload: Optional[dict[str, Any]]
     # timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
+class PromptProfileRequest(BaseModel):
+    name: str  # profielnaam, bijv. "default", "obsidian", "code"
+
+class PromptProfile(BaseModel):       
+    name: str
+    system_prompt: str
+    dynamic_context: str
+    voice: Optional[str] = None
+
 class PromptsMessage(BaseModel):
     trigger_type: Optional[str] = None
     action_type: Optional[str] = None
@@ -181,25 +190,31 @@ class PromptsMessage(BaseModel):
 
 @app.post("/prompts")
 async def handle_prompts(message: PromptsMessage):
-    # PULL: Ophalen van beide prompts
+    # PULL: Ophalen van een profiel
     if message.trigger_type == "pull_prompts":
-        system = await prompt_manager.get_system_prompt("system_prompt")
-        dynamic = await prompt_manager.get_dynamic_context("dynamic_context")
+        profile_name = "default"
+        if message.payload and isinstance(message.payload, dict):
+            profile_name = message.payload.get("name", "default")
+
+        system = await prompt_manager.get_system_prompt(profile_name)       
+        dynamic = await prompt_manager.get_dynamic_context(profile_name)    
+        voice = prompt_manager.get_profile_voice(profile_name)
+
         return {
             "system_prompt": system,
-            "dynamic_context": dynamic}
+            "dynamic_context": dynamic,
+            "voice": voice}
 
-    # PUSH: Wegschrijven van beide prompts
+    # PUSH: Wegschrijven van een profiel
     elif message.action_type == "push_prompts":
         if not message.payload:
             raise HTTPException(status_code=400, detail="Payload ontbreekt")
-        system = message.payload.get("system_prompt", "")
-        dynamic = message.payload.get("dynamic_context", [])
-        await prompt_manager.set_default_system_prompt(system)
-        await prompt_manager.set_default_dynamic_context(dynamic)
-        return {"message": "Prompts updated"}
 
-    # Ongeldige trigger/actie
+        profile = PromptProfile(**message.payload)
+        await prompt_manager.save_prompt_profile(profile)
+
+        return {"message": f"Prompt-profiel '{profile.name}' opgeslagen."}  
+
     else:
         raise HTTPException(status_code=400, detail="Ongeldige trigger of actie")
 
@@ -1692,8 +1707,8 @@ async def chat_with_llm(client, messages):
     call_params = dict(params_no_tools) if chosen_model == "chatgpt-4o-latest" else dict(params_with_tools)
     call_params["model"] = chosen_model
 
-    system_prompt = await prompt_manager.get_system_prompt("system_prompt")
-    dynamic_context = await prompt_manager.get_dynamic_context("dynamic_context")
+    system_prompt = prompt_manager.get_current_system_prompt()
+    dynamic_context = prompt_manager.get_current_dynamic_context()
 
     combined_messages = [{"role": "system", "content": system_prompt}] + dynamic_context + messages
     chat_completion = await client.chat.completions.create(
@@ -2095,7 +2110,7 @@ class PromptManager:
         try:
             with sqlite3.connect(self.db_path) as db:
                 cursor = db.execute(
-                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                    "SELECT system_prompt FROM prompts WHERE prompt_name = ?", (prompt_name,))
                 row = cursor.fetchone()
             if row:
                 content = row[0]
@@ -2114,7 +2129,7 @@ class PromptManager:
         try:
             with sqlite3.connect(self.db_path) as db:
                 cursor = db.execute(
-                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                    "SELECT dynamic_context FROM prompts WHERE prompt_name = ?", (prompt_name,))
                 row = cursor.fetchone()
             if row:
                 content = row[0]
@@ -2134,16 +2149,24 @@ class PromptManager:
             logging.error(f"DB error in get_dynamic_context_sync: {e}")
             return []
 
-    def load_default_prompts_sync(self):
-        self.system_prompt = self.get_system_prompt_sync("system_prompt")
-        self.dynamic_context = self.get_dynamic_context_sync("dynamic_context")
+    def get_profile_voice(self, profile_name: str) -> str | None:
+    # Tijdelijk hardcoded mapping
+        mapping = {
+            "default": "Martin_int",
+            "obsidian": "George",
+            "code": "Frank"}
+        return mapping.get(profile_name)
+
+    def load_default_prompts_sync(self, profile_name="default"):
+        self.system_prompt = self.get_system_prompt_sync(profile_name)
+        self.dynamic_context = self.get_dynamic_context_sync(profile_name)
 
     # --- Asynchronous methods for FastAPI endpoints ---
     async def get_system_prompt(self, prompt_name: str) -> str:
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 cursor = await db.execute(
-                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                    "SELECT system_prompt FROM prompts WHERE prompt_name = ?", (prompt_name,))
                 row = await cursor.fetchone()
                 await cursor.close()
             if row:
@@ -2163,7 +2186,7 @@ class PromptManager:
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 cursor = await db.execute(
-                    "SELECT content FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                    "SELECT dynamic_context FROM prompts WHERE prompt_name = ?", (prompt_name,))
                 row = await cursor.fetchone()
                 await cursor.close()
             if row:
@@ -2184,6 +2207,19 @@ class PromptManager:
             logging.error(f"DB error in get_dynamic_context (async): {e}")
             return []
 
+    async def save_prompt_profile(self, profile: PromptProfile):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO prompts (prompt_name, system_prompt, dynamic_context, voice)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(prompt_name) DO UPDATE SET
+                    system_prompt=excluded.system_prompt,
+                    dynamic_context=excluded.dynamic_context,
+                    voice=excluded.voice  
+            """, (profile.name, profile.system_prompt, profile.dynamic_context, profile.voice))
+            await db.commit()
+            print(f"Prompt-profiel '{profile.name}' opgeslagen in database.")
+
     async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str, summary=""):
         self.system_prompt = await self.get_system_prompt(new_system_prompt)
         self.dynamic_context = await self.get_dynamic_context(new_dynamic_context, summary=summary)
@@ -2194,8 +2230,8 @@ class PromptManager:
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
-                    "UPDATE prompts SET content = ? WHERE prompt_name = ?",
-                    (new_system_prompt, "system_prompt"))
+                    "UPDATE prompts SET system_prompt = ? WHERE prompt_name = ?",
+                    (new_system_prompt, "default"))
                 await db.commit()
         except Exception as e:
             logging.error(f"DB error in set_default_system_prompt (async): {e}")
@@ -2209,8 +2245,8 @@ class PromptManager:
             dynamic_context_str = json.dumps(new_dynamic_context)
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
-                    "UPDATE prompts SET content = ? WHERE prompt_name = ?",
-                    (dynamic_context_str, "dynamic_context"))
+                    "UPDATE prompts SET dynamic_context = ? WHERE prompt_name = ?",
+                    (dynamic_context_str, "default"))
                 await db.commit()
         except Exception as e:
             logging.error(f"DB error in set_default_dynamic_context (async): {e}")
@@ -2229,7 +2265,7 @@ class PromptManager:
     
 async def main():
     
-    os.system("cls")
+    # os.system("cls")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     
