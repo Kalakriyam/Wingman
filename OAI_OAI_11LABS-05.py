@@ -125,12 +125,12 @@ class NoteData(BaseModel):
     content: str
 
 class DefaultPrompts(BaseModel):
-    system_prompt: str = Field(default="system_prompt.txt")
-    dynamic_context: str = Field(default="dynamic_context.txt")
+    system_prompt: str = Field(default="system_prompt")
+    dynamic_context: str = Field(default="dynamic_context")
 
 class ConversationState(BaseModel):
-    system_prompt_file: str = Field(default="system_prompt.txt")
-    dynamic_context_file: str = Field(default="dynamic_context.txt")
+    system_prompt_file: str = Field(default="system_prompt")
+    dynamic_context_file: str = Field(default="dynamic_context")
     messages_list_file: str
     summary: str = Field(default="")
     timestamp: str
@@ -292,7 +292,7 @@ VOICE_ID = "Yko7PKHZNXotIFUBG7I9"
 # MODEL_ID = "eleven_multilingual_v2"
 MODEL_ID = "eleven_flash_v2_5"
 # model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
-model_options = ["chatgpt-4o-latest", "gpt-4.1","gpt-4.1-mini", "gpt-4.5-preview"]
+model_options = ["gpt-4.1", "chatgpt-4o-latest", "gpt-4.1-mini", "gpt-4.5-preview"]
 
 current_model_index = 0
 
@@ -862,60 +862,60 @@ def cycle_llm():
 
 keyboard.add_hotkey('ctrl+shift+l', cycle_llm)
 
-async def get_dynamic_context(filename="dynamic_context.txt"):
-    summary = await communication_manager.get_summary()
-    try:
-        async with global_http_session.get(
-            'http://192.168.178.144:5000/read-file',
-            params={'filename': filename}, 
-            timeout=2
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    content = data.get('content', '') # use .get for safety
+# async def get_dynamic_context(filename="dynamic_context.txt"):
+#     summary = await communication_manager.get_summary()
+#     try:
+#         async with global_http_session.get(
+#             'http://192.168.178.144:5000/read-file',
+#             params={'filename': filename}, 
+#             timeout=2
+#             ) as response:
+#                 if response.status == 200:
+#                     data = await response.json()
+#                     content = data.get('content', '') # use .get for safety
                     
-                    # Optional placeholder replacements
-                    now = datetime.now()
-                    content = content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-                    content = content.replace("{local_time}", now.strftime("%H:%M:%S"))
-                    content = content.replace("{summary}", summary)
+#                     # Optional placeholder replacements
+#                     now = datetime.now()
+#                     content = content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+#                     content = content.replace("{local_time}", now.strftime("%H:%M:%S"))
+#                     content = content.replace("{summary}", summary)
                     
-                    return [
-                        {"role": "user", "content": content},
-                        {"role": "assistant", "content": "OK!"}
-                    ]
-                else:
-                    logging.warning(f"Dynamic context server error: {response.status} - {await response.text()}") # Use warning, not error yet
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        logging.warning(f"Failed to fetch dynamic context from server, trying local file: {e}") # Use warning
+#                     return [
+#                         {"role": "user", "content": content},
+#                         {"role": "assistant", "content": "OK!"}
+#                     ]
+#                 else:
+#                     logging.warning(f"Dynamic context server error: {response.status} - {await response.text()}") # Use warning, not error yet
+#     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+#         logging.warning(f"Failed to fetch dynamic context from server, trying local file: {e}") # Use warning
 
-    # Fallback to local file if server fetch failed or returned non-200
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(script_dir, filename)
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as file:
-            content = await file.read()
-            now = datetime.now()
-            content = content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-            content = content.replace("{local_time}", now.strftime("%H:%M:%S"))
-            content = content.replace("{summary}", summary)
-            logging.info("Fetched dynamic context from local file") # Use info or print
-            dynamic_context = [
-                {"role": "user", "content": content},
-                {"role": "assistant", "content": "OK!"}
-            ]
-            # prompt_manager.set_default_dynamic_context(dynamic_context) # This line is redundant here and can be removed
-            # **** FIX: Add the return statement ****
-            return dynamic_context
-    except IOError as e:
-        logging.error(f"Failed to read local dynamic_context file '{filename}': {e}")
-        # **** FIX: Return an empty list instead of a string ****
-        # This signifies no dynamic context could be loaded, but prevents the TypeError
-        return []
-    except Exception as e:
-        # Catch any other unexpected errors during local file processing
-        logging.error(f"Unexpected error processing local dynamic context file '{filename}': {e}")
-        return [] # Return empty list on unexpected errors too
+#     # Fallback to local file if server fetch failed or returned non-200
+#     try:
+#         script_dir = os.path.dirname(os.path.abspath(__file__))
+#         file_path = os.path.join(script_dir, filename)
+#         async with aiofiles.open(file_path, 'r', encoding='utf-8') as file:
+#             content = await file.read()
+#             now = datetime.now()
+#             content = content.replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+#             content = content.replace("{local_time}", now.strftime("%H:%M:%S"))
+#             content = content.replace("{summary}", summary)
+#             logging.info("Fetched dynamic context from local file") # Use info or print
+#             dynamic_context = [
+#                 {"role": "user", "content": content},
+#                 {"role": "assistant", "content": "OK!"}
+#             ]
+#             # prompt_manager.set_default_dynamic_context(dynamic_context) # This line is redundant here and can be removed
+#             # **** FIX: Add the return statement ****
+#             return dynamic_context
+#     except IOError as e:
+#         logging.error(f"Failed to read local dynamic_context file '{filename}': {e}")
+#         # **** FIX: Return an empty list instead of a string ****
+#         # This signifies no dynamic context could be loaded, but prevents the TypeError
+#         return []
+#     except Exception as e:
+#         # Catch any other unexpected errors during local file processing
+#         logging.error(f"Unexpected error processing local dynamic context file '{filename}': {e}")
+#         return [] # Return empty list on unexpected errors too
 
 
 def reset_chat_history():
@@ -2104,6 +2104,7 @@ class PromptManager:
         self.db_path = db_path
         self.system_prompt = ""
         self.dynamic_context = []
+        self._lock = asyncio.Lock()
 
     # --- Synchronous methods for hotkey handlers ---
     def get_system_prompt_sync(self, prompt_name: str) -> str:
@@ -2138,6 +2139,7 @@ class PromptManager:
                            .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
                            .replace("{local_time}", now.strftime("%H:%M:%S"))
                            .replace("{summary}", summary))
+                print("dynamic context loaded")
                 return [
                     {"role": "user", "content": content},
                     {"role": "assistant", "content": "OK!"}
@@ -2163,93 +2165,98 @@ class PromptManager:
 
     # --- Asynchronous methods for FastAPI endpoints ---
     async def get_system_prompt(self, prompt_name: str) -> str:
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT system_prompt FROM prompts WHERE prompt_name = ?", (prompt_name,))
-                row = await cursor.fetchone()
-                await cursor.close()
-            if row:
-                content = row[0]
-                now = datetime.now()
-                return (content
-                        .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-                        .replace("{local_time}", now.strftime("%H:%M:%S")))
-            else:
-                logging.error(f"No system prompt found async for '{prompt_name}'")
-                return f"System prompt '{prompt_name}' not found."
-        except Exception as e:
-            logging.error(f"DB error in get_system_prompt (async): {e}")
-            return "Error retrieving system prompt."
+        async with self._lock:
+            try:
+                async with aiosqlite.connect(self.db_path) as db:
+                    cursor = await db.execute(
+                        "SELECT system_prompt FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                    row = await cursor.fetchone()
+                    await cursor.close()
+                if row:
+                    content = row[0]
+                    now = datetime.now()
+                    return (content
+                            .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                            .replace("{local_time}", now.strftime("%H:%M:%S")))
+                else:
+                    logging.error(f"No system prompt found async for '{prompt_name}'")
+                    return f"System prompt '{prompt_name}' not found."
+            except Exception as e:
+                logging.error(f"DB error in get_system_prompt (async): {e}")
+                return "Error retrieving system prompt."
 
     async def get_dynamic_context(self, prompt_name="dynamic_context", summary="") -> list:
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT dynamic_context FROM prompts WHERE prompt_name = ?", (prompt_name,))
-                row = await cursor.fetchone()
-                await cursor.close()
-            if row:
-                content = row[0]
-                now = datetime.now()
-                content = (content
-                           .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
-                           .replace("{local_time}", now.strftime("%H:%M:%S"))
-                           .replace("{summary}", summary))
-                return [
-                    {"role": "user", "content": content},
-                    {"role": "assistant", "content": "OK!"}
-                ]
-            else:
-                logging.error(f"No dynamic context found async for '{prompt_name}'")
+        async with self._lock:
+            try:
+                async with aiosqlite.connect(self.db_path) as db:
+                    cursor = await db.execute(
+                        "SELECT dynamic_context FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                    row = await cursor.fetchone()
+                    await cursor.close()
+                if row:
+                    content = row[0] or ""
+                    now = datetime.now()
+                    content = (content
+                            .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
+                            .replace("{local_time}", now.strftime("%H:%M:%S"))
+                            .replace("{summary}", summary))
+                    return [
+                        {"role": "user", "content": content},
+                        {"role": "assistant", "content": "OK!"}
+                    ]
+                else:
+                    logging.error(f"No dynamic context found async for '{prompt_name}'")
+                    return []
+            except Exception as e:
+                logging.error(f"DB error in get_dynamic_context (async): {e}")
                 return []
-        except Exception as e:
-            logging.error(f"DB error in get_dynamic_context (async): {e}")
-            return []
 
     async def save_prompt_profile(self, profile: PromptProfile):
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("""
-                INSERT INTO prompts (prompt_name, system_prompt, dynamic_context, voice)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(prompt_name) DO UPDATE SET
-                    system_prompt=excluded.system_prompt,
-                    dynamic_context=excluded.dynamic_context,
-                    voice=excluded.voice  
-            """, (profile.name, profile.system_prompt, profile.dynamic_context, profile.voice))
-            await db.commit()
-            print(f"Prompt-profiel '{profile.name}' opgeslagen in database.")
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    INSERT INTO prompts (prompt_name, system_prompt, dynamic_context, voice)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(prompt_name) DO UPDATE SET
+                        system_prompt=excluded.system_prompt,
+                        dynamic_context=excluded.dynamic_context,
+                        voice=excluded.voice  
+                """, (profile.name, profile.system_prompt, profile.dynamic_context, profile.voice))
+                await db.commit()
+                print(f"Prompt-profiel '{profile.name}' opgeslagen in database.")
 
     async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str, summary=""):
         self.system_prompt = await self.get_system_prompt(new_system_prompt)
         self.dynamic_context = await self.get_dynamic_context(new_dynamic_context, summary=summary)
 
     async def set_default_system_prompt(self, new_system_prompt: str):
-        self.system_prompt = new_system_prompt
-        # Optioneel: ook direct in de database opslaan
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
+        async with self._lock:
+            self.system_prompt = new_system_prompt
+            # Optioneel: ook direct in de database opslaan
+            try:
+                async with aiosqlite.connect(self.db_path) as db:
+                    await db.execute(
                     "UPDATE prompts SET system_prompt = ? WHERE prompt_name = ?",
                     (new_system_prompt, "default"))
-                await db.commit()
-        except Exception as e:
-            logging.error(f"DB error in set_default_system_prompt (async): {e}")
+                    await db.commit()
+            except Exception as e:
+                logging.error(f"DB error in set_default_system_prompt (async): {e}")
 
     async def set_default_dynamic_context(self, new_dynamic_context: list):
-        self.dynamic_context = new_dynamic_context
-        # Optioneel: ook direct in de database opslaan
-        try:
-            # Sla op als string (bijvoorbeeld JSON)
-            import json
-            dynamic_context_str = json.dumps(new_dynamic_context)
-            async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    "UPDATE prompts SET dynamic_context = ? WHERE prompt_name = ?",
-                    (dynamic_context_str, "default"))
-                await db.commit()
-        except Exception as e:
-            logging.error(f"DB error in set_default_dynamic_context (async): {e}")
+        async with self._lock:
+            self.dynamic_context = new_dynamic_context
+            # Optioneel: ook direct in de database opslaan
+            try:
+                # Sla op als string (bijvoorbeeld JSON)
+                import json
+                dynamic_context_str = json.dumps(new_dynamic_context)
+                async with aiosqlite.connect(self.db_path) as db:
+                    await db.execute(
+                        "UPDATE prompts SET dynamic_context = ? WHERE prompt_name = ?",
+                        (dynamic_context_str, "default"))
+                    await db.commit()
+            except Exception as e:
+                logging.error(f"DB error in set_default_dynamic_context (async): {e}")
 
     def set_default_system_prompt(self, new_system_prompt: str):
         self.system_prompt = new_system_prompt
