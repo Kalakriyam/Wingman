@@ -1020,7 +1020,7 @@ async def save_idea_event():
     Coroutine die continu luistert naar idea events (F9 key),
     en elk idee opslaat in de database én naar Obsidian stuurt."""
     global global_http_session
-    print("Starting idea event listener...")
+    logging.info("Starting idea event listener...")
 
     while True:
         user_input = await whisper_transcriber.idea_event()
@@ -1073,7 +1073,7 @@ async def save_journal_event():
     Coroutine die continu luistert naar journal events (F7 key),
     en elk journal opslaat in de database én naar Obsidian stuurt."""
     global global_http_session
-    print("Starting journal event listener...")
+    logging.info("Starting journal event listener...")
 
     while True:
         user_input = await whisper_transcriber.journal_event()
@@ -2142,7 +2142,7 @@ class PromptManager:
                            .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
                            .replace("{local_time}", now.strftime("%H:%M:%S"))
                            .replace("{summary}", summary))
-                print("dynamic context loaded")
+                # print("dynamic context loaded")
                 return [
                     {"role": "user", "content": content},
                     {"role": "assistant", "content": "OK!"}
@@ -2185,7 +2185,7 @@ class PromptManager:
                 if row:
                     content = row[0]
                     now = datetime.now()
-                    print(content)
+                    # print(content)
                     return (content
                             .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
                             .replace("{local_time}", now.strftime("%H:%M:%S")))
@@ -2283,7 +2283,7 @@ class PromptManager:
     
 async def main():
     
-    # os.system("cls")
+    os.system("cls")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     
