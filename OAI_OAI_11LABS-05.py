@@ -196,9 +196,12 @@ async def handle_prompts(message: PromptsMessage):
         if message.payload and isinstance(message.payload, dict):
             profile_name = message.payload.get("name", "default")
 
+        print(profile_name)
+
+
         system = await prompt_manager.get_system_prompt(profile_name)       
         dynamic = await prompt_manager.get_dynamic_context(profile_name)    
-        voice = prompt_manager.get_profile_voice(profile_name)
+        voice = await prompt_manager.get_profile_voice(profile_name)
 
         return {
             "system_prompt": system,
@@ -292,7 +295,7 @@ VOICE_ID = "Yko7PKHZNXotIFUBG7I9"
 # MODEL_ID = "eleven_multilingual_v2"
 MODEL_ID = "eleven_flash_v2_5"
 # model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
-model_options = ["gpt-4.1", "chatgpt-4o-latest", "gpt-4.1-mini", "gpt-4.5-preview"]
+model_options = ["chatgpt-4o-latest", "gpt-4.1", "gpt-4.1-mini", "gpt-4.5-preview"]
 
 current_model_index = 0
 
@@ -989,8 +992,8 @@ def load_latest_conversation_state():
     if not state:
         print("Geen conversation state gevonden. Start met lege sessie.")
         communication_manager.set_messages_sync([])
-        prompt_manager.set_default_system_prompt("")
-        prompt_manager.set_default_dynamic_context([])
+        # prompt_manager.set_default_system_prompt("")
+        # prompt_manager.set_default_dynamic_context([])
         return
 
     summary = state.get("summary", "")
@@ -1001,11 +1004,11 @@ def load_latest_conversation_state():
     communication_manager.set_messages_sync(messages)
     print(f"{len(messages)} messages geladen.")
 
-    system_prompt = prompt_manager.get_system_prompt_sync(state["system_prompt_name"])
-    prompt_manager.set_default_system_prompt(system_prompt)
+    # system_prompt = prompt_manager.get_system_prompt_sync(state["system_prompt_name"])
+    # prompt_manager.set_default_system_prompt(system_prompt)
 
-    dynamic_context = prompt_manager.get_dynamic_context_sync(state["dynamic_context_name"], summary=summary)
-    prompt_manager.set_default_dynamic_context(dynamic_context)
+    # dynamic_context = prompt_manager.get_dynamic_context_sync(state["dynamic_context_name"], summary=summary)
+    # prompt_manager.set_default_dynamic_context(dynamic_context)
 
     print(f"Conversation state '{event_id}' geladen.")
 
@@ -1605,7 +1608,7 @@ async def obsidian_agent():
     after receiving user input and before doing the API call
     """
     global audio_order, global_http_session
-    obsidian_agent_prompt = await prompt_manager.get_system_prompt("obsidian_agent_prompt")
+    obsidian_agent_prompt = await prompt_manager.get_system_prompt("obsidian")
 
 
     logging.info("\nStarting idea event listener...")
@@ -2151,13 +2154,20 @@ class PromptManager:
             logging.error(f"DB error in get_dynamic_context_sync: {e}")
             return []
 
-    def get_profile_voice(self, profile_name: str) -> str | None:
-    # Tijdelijk hardcoded mapping
-        mapping = {
-            "default": "Martin_int",
-            "obsidian": "George",
-            "code": "Frank"}
-        return mapping.get(profile_name)
+    async def get_profile_voice(self, profile_name: str) -> str | None:   
+        async with self._lock:
+            try:
+                async with aiosqlite.connect(self.db_path) as db:
+                    cursor = await db.execute(
+                        "SELECT voice FROM prompts WHERE prompt_name = ?", (profile_name,))
+                    row = await cursor.fetchone()
+                    await cursor.close()
+                if row:
+                    return row[0]
+                return None
+            except Exception as e:
+                logging.error(f"DB error in get_profile_voice_async: {e}")      
+                return None
 
     def load_default_prompts_sync(self, profile_name="default"):
         self.system_prompt = self.get_system_prompt_sync(profile_name)
@@ -2175,6 +2185,7 @@ class PromptManager:
                 if row:
                     content = row[0]
                     now = datetime.now()
+                    print(content)
                     return (content
                             .replace("{local_date}", now.strftime("%A, %Y-%m-%d"))
                             .replace("{local_time}", now.strftime("%H:%M:%S")))
