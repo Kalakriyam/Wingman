@@ -32,6 +32,7 @@ from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
 from ultimate_playback import play
+from db_helpers import list_modes, add_mode, delete_mode
 from openai import AsyncOpenAI
 from whisper import WhisperTranscriber
 from elevenlabs.client import AsyncElevenLabs
@@ -188,6 +189,30 @@ class PromptsMessage(BaseModel):
     action_type: Optional[str] = None
     payload: Optional[dict[str, Any]] = None
 
+
+MODES_DB_PATH = "modes_and_prompts.db"
+
+@app.post("/mode")
+async def handle_mode(message: PromptsMessage):
+    if message.trigger_type == "list_modes":
+        return await list_modes(MODES_DB_PATH)
+    elif message.action_type == "add_mode":
+        name = message.payload.get("name")
+        if name:
+            await add_mode(name, MODES_DB_PATH)
+            return {"status": "added", "name": name}
+        else:
+            raise HTTPException(status_code=400, detail="Naam ontbreekt")   
+    elif message.action_type == "delete_mode":
+        name = message.payload.get("name")
+        if name:
+            await delete_mode(name, MODES_DB_PATH)
+            return {"status": "deleted", "name": name}
+        else:
+            raise HTTPException(status_code=400, detail="Naam ontbreekt")   
+    else:
+        raise HTTPException(status_code=400, detail="Ongeldige trigger of actie")
+    
 @app.post("/prompts")
 async def handle_prompts(message: PromptsMessage):
     # PULL: Ophalen van een profiel
@@ -2102,7 +2127,7 @@ class EventManager:
         return None
     
 
-PROMPT_DB_PATH = 'prompt_store.db'
+PROMPT_DB_PATH = 'modes_and_prompts.db'
 
 class PromptManager:
     def __init__(self, db_path=PROMPT_DB_PATH):
