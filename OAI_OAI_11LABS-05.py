@@ -216,7 +216,18 @@ async def handle_prompts(message: PromptsMessage):
         profile = PromptProfile(**message.payload)
         await prompt_manager.save_prompt_profile(profile)
 
-        return {"message": f"Prompt-profiel '{profile.name}' opgeslagen."}  
+        return {"message": f"Prompt-profiel '{profile.name}' opgeslagen."}
+
+    elif message.trigger_type == "list_prompts":
+        names = await prompt_manager.list_prompt_names() 
+        return names 
+
+    elif message.action_type == "delete_prompt":
+        name = message.payload.get("name")
+        if not name:
+            raise ValueError("Geen profielnaam opgegeven voor verwijderen.")
+        await prompt_manager.delete_prompt(name)
+        return {"status": "deleted", "name": name} 
 
     else:
         raise HTTPException(status_code=400, detail="Ongeldige trigger of actie")
@@ -2174,6 +2185,21 @@ class PromptManager:
         self.dynamic_context = self.get_dynamic_context_sync(profile_name)
 
     # --- Asynchronous methods for FastAPI endpoints ---
+    async def list_prompt_names(self) -> list[str]:
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("SELECT prompt_name FROM prompts")
+                rows = await cursor.fetchall()
+                await cursor.close()
+            return [row[0] for row in rows]
+        
+    async def delete_prompt(self, prompt_name: str):
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("DELETE FROM prompts WHERE prompt_name = ?", (prompt_name,))
+                await db.commit()
+            print(f"Prompt-profiel '{prompt_name}' verwijderd uit database.")
+        
     async def get_system_prompt(self, prompt_name: str) -> str:
         async with self._lock:
             try:
