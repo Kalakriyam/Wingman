@@ -196,17 +196,8 @@ async def handle_prompts(message: PromptsMessage):
         if message.payload and isinstance(message.payload, dict):
             profile_name = message.payload.get("name", "default")
 
-        print(profile_name)
-
-
-        system = await prompt_manager.get_system_prompt(profile_name)       
-        dynamic = await prompt_manager.get_dynamic_context(profile_name)    
-        voice = await prompt_manager.get_profile_voice(profile_name)
-
-        return {
-            "system_prompt": system,
-            "dynamic_context": dynamic,
-            "voice": voice}
+        raw_profile = await prompt_manager.get_raw_prompt_profile(profile_name)
+        return raw_profile
 
     # PUSH: Wegschrijven van een profiel
     elif message.action_type == "push_prompts":
@@ -2192,6 +2183,22 @@ class PromptManager:
                 rows = await cursor.fetchall()
                 await cursor.close()
             return [row[0] for row in rows]
+        
+    async def get_raw_prompt_profile(self, prompt_name: str) -> dict[str, str]:
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT system_prompt, dynamic_context, voice FROM prompts WHERE prompt_name = ?",
+                    (prompt_name,))
+                row = await cursor.fetchone()
+                await cursor.close()
+            if row:
+                return {
+                    "system_prompt": row[0],
+                    "dynamic_context": row[1],
+                    "voice": row[2]
+    }
+            return {"system_prompt": "", "dynamic_context": "", "voice": None}
         
     async def delete_prompt(self, prompt_name: str):
         async with self._lock:
