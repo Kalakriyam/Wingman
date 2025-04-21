@@ -121,6 +121,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ConversationState(BaseModel):
+    id: str  # Unieke ID, gelijk aan bestandsnaam of event_id
+    messages_list_file: str
+    message_upto_index: int
+    summary: str = ""
+    timestamp: str
+    tags: list[str] = Field(default_factory=list)
+    links: list[str] = Field(default_factory=list)
+    last_mode: str
+    parent_id: str
+    origin_event_id: str | None = None  # Verwijst naar eerste conversation state of het event waaruit het ontstond
+
+class MessageList(BaseModel):
+    id: str
+    messages: list[dict[str, str]]
+
+class IdeaEvent(BaseModel):
+    event_id: str
+    source: dict[str, str]
+
+class JournalEvent(BaseModel):
+    event_id: str
+    source: dict[str, str]
+
 class NoteData(BaseModel):
     title: str
     content: str
@@ -128,15 +152,6 @@ class NoteData(BaseModel):
 class DefaultPrompts(BaseModel):
     system_prompt: str = Field(default="system_prompt")
     dynamic_context: str = Field(default="dynamic_context")
-
-class ConversationState(BaseModel):
-    system_prompt_file: str = Field(default="system_prompt")
-    dynamic_context_file: str = Field(default="dynamic_context")
-    messages_list_file: str
-    summary: str = Field(default="")
-    timestamp: str
-    tags: list = Field(default_factory=list)
-    links: list = Field(default_factory=list)
 
 class VoiceUpdateRequest(BaseModel):
     voice_id: str
@@ -191,6 +206,13 @@ class PromptsMessage(BaseModel):
 
 
 MODES_DB_PATH = "modes_and_prompts.db"
+
+EVENT_TYPE_TO_MODEL = {
+    "ConversationState": ConversationState,
+    "IdeaEvent": IdeaEvent,
+    "JournalEvent": JournalEvent,
+    # Voeg hier andere types toe
+    }
 
 @app.post("/mode")
 async def handle_mode(message: PromptsMessage):
@@ -764,7 +786,7 @@ async def tasks_agent():
 
     # Create Agent
     tasks_agent = Agent(
-        model="google-gla:gemini-2.0-flash",
+        model="google-gla:gemini-2.5-flash",
         deps_type=ListManagerDeps,
         system_prompt=("""
 Je beheert drie lijsten: boodschappen ('shopping'), persoonlijke taken ('personal') en professionele taken ('professional') .
@@ -963,20 +985,49 @@ def reset_chat_history():
 keyboard.add_hotkey('ctrl+shift+9', reset_chat_history)
 
 
-def save_conversation_state(system_prompt_name="system_prompt",
-                            dynamic_context_name="dynamic_context") -> str:
+def save_conversation_state() -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    messages = communication_manager.get_messages_sync()
+    event_id = f"conversation_state_{timestamp}"
+
     summary = communication_manager.get_summary_sync()
-    conversation_state = {
-        "system_prompt_name": system_prompt_name,
-        "dynamic_context_name": dynamic_context_name,
-        "summary": summary,
-        "messages": messages,
-        "tags": [],
-        "links": []
-    }
-    event_id = event_manager.save_event("conversation_state", conversation_state, event_id=timestamp)
+    messages = communication_manager.get_messages_sync()
+    message_upto_index = len(messages) - 1
+
+    # Opslaan van messages-lijst als MessageList object in database
+    messages_list_id = f"messages_{timestamp}"
+    message_list = MessageList(id=messages_list_id, messages=messages)
+    event_manager.save_list(message_list)
+
+    # Modus en lineage
+    last_mode = communication_manager.get_current_mode()
+    parent_id = communication_manager.parent_conversation_id or event_id
+    origin_event_id = communication_manager.origin_event_id or None
+
+
+    # Bouw ConversationState object
+    state = ConversationState(
+        id=event_id,
+        messages_list_file=messages_list_id,
+        message_upto_index=message_upto_index,
+        summary=summary,
+        timestamp=timestamp,
+        tags=[],
+        links=[],
+        last_mode=last_mode,
+        parent_id=parent_id,
+        origin_event_id=origin_event_id)
+
+    # Serialiseer en sla ConversationState op in events-tabel
+    content_json = orjson.dumps(state.model_dump(mode="json")).decode("utf-8")
+    with event_manager.lock, connect(event_manager.db_path) as conn:
+        conn.execute(
+            "INSERT INTO events (event_id, type, content) VALUES (?, ?, ?)",
+            (event_id, "ConversationState", content_json))
+        conn.commit()
+
+    # Update sessie-informatie
+    communication_manager.parent_conversation_id = event_id
+
     print(f"Conversation state opgeslagen in database met ID: {event_id}")
     return event_id
 
@@ -985,29 +1036,39 @@ keyboard.add_hotkey('ctrl+shift+o', save_conversation_state)
 
 def use_specific_conversation_state(event_id: str):
     print(f"Loading specific conversation state: {event_id}")
-    event_type, state = event_manager.get_event_by_id(event_id)
-    if not state or event_type != "conversation_state":
-        print(f"Geen geldige conversation state gevonden voor ID: {event_id}")
+    result = event_manager.get_event_by_id(event_id)
+    if not result:
+        print(f"Geen geldig event gevonden voor ID: {event_id}")
         communication_manager.set_messages_sync([])
         prompt_manager.set_default_system_prompt("")
         prompt_manager.set_default_dynamic_context([])
         return
 
-    summary = state.get("summary", "")
-    communication_manager.load_summary_sync(summary)
-    print(f"Conversation summary: {summary}")
+    event_type, model = result
+    if event_type != "ConversationState":
+        print(f"Event type '{event_type}' is geen ConversationState.")
+        return
 
-    messages = state.get("messages", [])
-    communication_manager.set_messages_sync(messages)
-    print(f"{len(messages)} messages geladen.")
+    state: ConversationState = model  # type hint for clarity
 
-    system_prompt = prompt_manager.get_system_prompt(state["system_prompt_name"])
-    prompt_manager.set_default_system_prompt(system_prompt)
+    # Laad summary
+    communication_manager.load_summary_sync(state.summary)
+    print(f"Conversation summary: {state.summary}")
 
-    dynamic_context = prompt_manager.get_dynamic_context(state["dynamic_context_name"], summary=summary)
-    prompt_manager.set_default_dynamic_context(dynamic_context)
+    # Laad messages (tot en met index)
+    messages = event_manager.load_list(state.messages_list_file)
+    communication_manager.set_messages_sync(messages[:state.message_upto_index + 1])
+    print(f"{state.message_upto_index + 1} messages geladen.")
 
-    print(f"Conversation state '{event_id}' geladen.")
+    # Laad prompts op basis van modus
+    prompt_manager.load_default_prompts_sync(state.last_mode)
+
+    # Update sessie state
+    communication_manager.parent_conversation_id = state.id
+    communication_manager.origin_event_id = state.origin_event_id
+    communication_manager.current_mode = state.last_mode
+
+    print(f"Conversation state '{state.id}' geladen.")
 
 # Register the hotkey
 keyboard.add_hotkey('ctrl+shift+0', use_specific_conversation_state)
@@ -1015,29 +1076,33 @@ keyboard.add_hotkey('ctrl+shift+0', use_specific_conversation_state)
 
 def load_latest_conversation_state():
     print("Loading latest conversation state...")
-    event_id, state = event_manager.get_latest_event("conversation_state")
-    if not state:
+    result = event_manager.get_latest_event("ConversationState")
+    if not result:
         print("Geen conversation state gevonden. Start met lege sessie.")
         communication_manager.set_messages_sync([])
-        # prompt_manager.set_default_system_prompt("")
-        # prompt_manager.set_default_dynamic_context([])
         return
 
-    summary = state.get("summary", "")
-    communication_manager.load_summary_sync(summary)
-    print(f"Conversation summary: {summary}")
+    event_id, model = result
+    state: ConversationState = model
 
-    messages = state.get("messages", [])
-    communication_manager.set_messages_sync(messages)
-    print(f"{len(messages)} messages geladen.")
+    # Laad summary
+    communication_manager.load_summary_sync(state.summary)
+    print(f"Conversation summary: {state.summary}")
 
-    # system_prompt = prompt_manager.get_system_prompt_sync(state["system_prompt_name"])
-    # prompt_manager.set_default_system_prompt(system_prompt)
+    # Laad messages (tot en met index)
+    messages = event_manager.load_list(state.messages_list_file)
+    communication_manager.set_messages_sync(messages[:state.message_upto_index + 1])
+    print(f"{state.message_upto_index + 1} messages geladen.")
 
-    # dynamic_context = prompt_manager.get_dynamic_context_sync(state["dynamic_context_name"], summary=summary)
-    # prompt_manager.set_default_dynamic_context(dynamic_context)
+    # Laad prompts op basis van opgeslagen modus     
+    prompt_manager.load_default_prompts_sync(state.last_mode)
 
-    print(f"Conversation state '{event_id}' geladen.")
+    # Update sessie state
+    communication_manager.parent_conversation_id = state.id
+    communication_manager.origin_event_id = state.origin_event_id
+    communication_manager.current_mode = state.last_mode  # ✅ correct veld
+
+    print(f"Conversation state '{state.id}' geladen.")
 
 keyboard.add_hotkey('ctrl+shift+r', load_latest_conversation_state)
 
@@ -1957,6 +2022,11 @@ class CommunicationManager:
         self._lock = asyncio.Lock()
         self.summary: str = ""
 
+        # Conversatie-gerelateerde sessiegegevens    
+        self.current_mode: str = "default"
+        self.parent_conversation_id: str | None = None
+        self.origin_event_id: str | None = None
+
     async def handle_action(self, message: Message) -> str:
         async with self._lock:
             if message.action_type == ActionType.PUSH_SUMMARY:
@@ -2045,11 +2115,17 @@ class CommunicationManager:
     def get_summary_sync(self) -> str:
         return self.summary
 
+    def get_current_mode(self) -> str:
+        return self.current_mode
+
     def set_messages_sync(self, new_messages: list[dict[str, str]]) -> None:
         self.messages = new_messages
 
     def load_summary_sync(self, summary: str) -> None:
         self.summary = summary
+
+    def set_current_mode(self, mode: str):
+        self.current_mode = mode
 
 
 class EventManager:
@@ -2072,6 +2148,11 @@ class EventManager:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT)""")
+            # lists-tabel toevoegen
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS lists (
+                    id TEXT PRIMARY KEY,
+                    content TEXT)""")
             conn.commit()
 
     def save_event(self, event_type: str, content: dict, event_id: str = None):
@@ -2085,29 +2166,132 @@ class EventManager:
             conn.commit()
         return event_id
 
-    def get_latest_event(self, event_type: str):
+    def get_latest_event(self, event_type: str) -> tuple[str, BaseModel] | None:
         with self.lock, connect(self.db_path) as conn:
             cursor = conn.execute(
                 "SELECT event_id, content FROM events WHERE type = ? ORDER BY created_at DESC LIMIT 1",
                 (event_type,))
             row = cursor.fetchone()
+
         if row:
             event_id, content_json = row
-            content = orjson.loads(content_json)
-            return event_id, content
-        return None, None
+            try:
+                content_dict = orjson.loads(content_json)
+                model_cls = EVENT_TYPE_TO_MODEL.get(event_type)
+                if not model_cls:
+                    print(f"Onbekend event_type '{event_type}' voor laatste event")
+                    return None
+                validated = model_cls.model_validate(content_dict)
+                return event_id, validated
+            except Exception as e:
+                print(f"Fout bij valideren {event_type} voor laatste event: {e}")
+                return None
+        return None
 
-    def get_event_by_id(self, event_id: str):
+
+
+# Je kunt deze functie nu gebruiken voor:
+# event_manager.list_events("ConversationState")
+# event_manager.list_events("idea")
+# event_manager.list_events("journal")
+    def list_events(self, event_type: str) -> list[tuple[str, BaseModel]]:
+        results = []
+        model_cls = EVENT_TYPE_TO_MODEL.get(event_type)
+        if not model_cls:
+            print(f"Onbekend event_type '{event_type}' in list_events()")
+            return []
+
+        with self.lock, connect(self.db_path) as conn:   
+            cursor = conn.execute(
+                "SELECT event_id, content FROM events WHERE type = ? ORDER BY created_at DESC",
+                (event_type,))
+            rows = cursor.fetchall()
+
+        for event_id, content_json in rows:
+            try:
+                content_dict = orjson.loads(content_json)
+                validated = model_cls.model_validate(content_dict)
+                results.append((event_id, validated))
+            except Exception as e:
+                print(f"Fout bij valideren {event_type} voor ID '{event_id}': {e}")
+                continue
+
+        return results
+
+    def delete_event(self, event_id: str) -> bool:
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM events WHERE event_id = ?", (event_id,))
+            conn.commit()
+            return cursor.rowcount > 0  # True als iets verwijderd is
+
+    def save_list(self, message_list: MessageList):
+        content_json = orjson.dumps(message_list.model_dump(mode="json")).decode("utf-8")
+        with self.lock, connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO lists (id, content) VALUES (?, ?)",
+                (message_list.id, content_json))
+            conn.commit()
+
+    def load_list(self, list_id: str) -> list[dict[str, str]]:
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT content FROM lists WHERE id = ?", (list_id,))
+            row = cursor.fetchone()
+
+        if row:
+            try:
+                content_dict = orjson.loads(row[0])
+                message_list = MessageList.model_validate(content_dict)
+                return message_list.messages
+            except Exception as e:
+                print(f"Fout bij valideren MessageList '{list_id}': {e}")
+                return []
+        return []
+
+    def delete_list(self, list_id: str) -> bool:
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM lists WHERE id = ?", (list_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def list_event_ids_by_date(
+        self,
+        date: str,  # formaat: "YYYY-MM-DD"
+        event_type: str | None = None
+    ) -> list[str]:
+        query = "SELECT event_id FROM events WHERE DATE(created_at) = ?"
+        params = [date]
+
+        if event_type:
+            query += " AND type = ?"
+            params.append(event_type)
+
+        with self.lock, connect(self.db_path) as conn:   
+            cursor = conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+        return [row[0] for row in rows]
+
+    def get_event_by_id(self, event_id: str) -> tuple[str, BaseModel] | None:
         with self.lock, connect(self.db_path) as conn:
             cursor = conn.execute(
                 "SELECT type, content FROM events WHERE event_id = ?",
                 (event_id,))
             row = cursor.fetchone()
+
         if row:
             event_type, content_json = row
-            content = orjson.loads(content_json)
-            return event_type, content
-        return None, None
+            try:
+                content_dict = orjson.loads(content_json)
+                model_cls = EVENT_TYPE_TO_MODEL.get(event_type)
+                if not model_cls:
+                    print(f"Onbekend event_type '{event_type}' voor ID '{event_id}'")
+                    return None
+                validated = model_cls.model_validate(content_dict)
+                return event_type, validated
+            except Exception as e:
+                print(f"Fout bij valideren {event_type} voor ID '{event_id}': {e}")
+                return None
+        return None
     
     def set_setting(self, key: str, value: str):
         with self.lock, connect(self.db_path) as conn:
