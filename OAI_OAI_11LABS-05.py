@@ -218,13 +218,25 @@ EVENT_TYPE_TO_MODEL = {
 async def handle_mode(message: PromptsMessage):
     if message.trigger_type == "list_modes":
         return await list_modes(MODES_DB_PATH)
+    
     elif message.action_type == "add_mode":
         name = message.payload.get("name")
         if name:
             await add_mode(name, MODES_DB_PATH)
             return {"status": "added", "name": name}
         else:
-            raise HTTPException(status_code=400, detail="Naam ontbreekt")   
+            raise HTTPException(status_code=400, detail="Naam ontbreekt")
+        
+    elif message.action_type == "set_mode":
+        name = message.payload.get("name")
+        if name:
+            await communication_manager.set_current_mode_async(name)
+            return {"status": "set", "mode": name}
+    
+    elif message.trigger_type == "get_current_mode":
+        mode = await communication_manager.get_current_mode_async()
+        return {"mode": mode} 
+    
     elif message.action_type == "delete_mode":
         name = message.payload.get("name")
         if name:
@@ -232,6 +244,7 @@ async def handle_mode(message: PromptsMessage):
             return {"status": "deleted", "name": name}
         else:
             raise HTTPException(status_code=400, detail="Naam ontbreekt")   
+    
     else:
         raise HTTPException(status_code=400, detail="Ongeldige trigger of actie")
     
@@ -2046,7 +2059,7 @@ class CommunicationManager:
                 else:
                     print("CommunicationManager: Warning - Received UPDATE_CONVERSATION action but payload was missing.")
                     return "warning - payload was missing"
-
+                
     async def handle_trigger(self, message: Message):
         async with self._lock:
             if message.trigger_type == TriggerType.PULL_CONVERSATION:
@@ -2108,6 +2121,14 @@ class CommunicationManager:
                 last_message['content'] += f"\n\n(Pasted clipboard content:)\n{clipboard_text.strip()}"
                 await asyncio.to_thread(pyperclip.copy, "")  # Leegmaken
                 print("Clipboard content added to last message.")
+
+    async def set_current_mode_async(self, mode: str):
+        async with self._lock:
+            self.current_mode = mode
+
+    async def get_current_mode_async(self) -> str:
+        async with self._lock:
+            return self.current_mode
 
     def get_messages_sync(self) -> list[dict[str, str]]:
         return self.messages.copy()
