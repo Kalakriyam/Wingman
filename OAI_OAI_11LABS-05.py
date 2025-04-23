@@ -342,7 +342,18 @@ async def handle_events(message: PromptsMessage):
             event_type, event_obj = result
             return event_obj.model_dump()
         else:
-            raise HTTPException(status_code=404, detail="Event niet gevonden")        
+            raise HTTPException(status_code=404, detail="Event niet gevonden") 
+
+    elif message.action_type == "delete_event":
+        event_id = message.payload.get("event_id")
+        if not event_id:
+            raise HTTPException(status_code=400, detail="event_id ontbreekt")
+        success = event_manager.delete_event(event_id)
+        if success:
+            return {"status": "deleted", "event_id": event_id}
+        else:
+            raise HTTPException(status_code=404, detail="Event niet gevonden of al verwijderd")
+               
     elif message.action_type == "get_list":
         list_id = message.payload.get("list_id")
         if not list_id:
@@ -834,10 +845,10 @@ async def tasks_agent():
 
     # Create Agent
     tasks_agent = Agent(
-        model="google-gla:gemini-2.5-flash",
+        model="google-gla:gemini-2.0-flash",
         deps_type=ListManagerDeps,
         system_prompt=("""
-Je beheert drie lijsten: boodschappen ('shopping'), persoonlijke taken ('personal') en professionele taken ('professional') .
+Je beheert drie lijsten: boodschappen ('shopping'), dagelijkse/persoonlijke taken ('personal') en professionele taken ('professional') .
 Je kunt items toevoegen, verwijderen, aanpassen en opvragen.
 
 **STAPPEN BIJ VERZOEK TOT VERWIJDEREN:**
