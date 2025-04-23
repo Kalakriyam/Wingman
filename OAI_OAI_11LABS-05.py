@@ -318,6 +318,41 @@ async def reload_default_prompts(refresh: DefaultPrompts):
     else:
         raise HTTPException(status_code=400, detail="Bericht incompleet")
 
+@app.post("/events")
+async def handle_events(message: PromptsMessage):
+    if message.action_type == "list_events":
+        event_type = message.payload.get("event_type")
+        dates = message.payload.get("dates", [])
+        if not event_type or not dates:
+            raise HTTPException(status_code=400, detail="event_type of dates ontbreekt")
+        if len(dates) == 1:
+            event_ids = event_manager.list_event_ids_by_date(dates[0], event_type)
+        elif len(dates) == 2:
+            event_ids = event_manager.list_event_ids_by_range(dates[0], dates[1], event_type)
+        else:
+            raise HTTPException(status_code=400, detail="dates moet 1 of 2 datums bevatten")
+        return event_ids
+    
+    elif message.action_type == "get_event":
+        event_id = message.payload.get("event_id")
+        if not event_id:
+            raise HTTPException(status_code=400, detail="event_id ontbreekt")
+        result = event_manager.get_event_by_id(event_id)
+        if result:
+            event_type, event_obj = result
+            return event_obj.model_dump()
+        else:
+            raise HTTPException(status_code=404, detail="Event niet gevonden")        
+    elif message.action_type == "get_list":
+        list_id = message.payload.get("list_id")
+        if not list_id:
+            raise HTTPException(status_code=400, detail="list_id ontbreekt")
+        messages = event_manager.load_list(list_id)
+        return messages
+
+    else:
+        raise HTTPException(status_code=400, detail="Ongeldige action_type")
+    
 ### Settings for elevenlabs
 # Frank_Khalid = GJR2IWXAu2geGLDhmrk4
 # Bill = pqHfZKP75CvOlQylNhV4
@@ -2290,6 +2325,22 @@ class EventManager:
             cursor = conn.execute(query, tuple(params))
             rows = cursor.fetchall()
 
+        return [row[0] for row in rows]
+
+    def list_event_ids_by_range(
+            self,
+            start_date: str,  # formaat: "YYYY-MM-DD"
+            end_date: str,    # formaat: "YYYY-MM-DD"
+            event_type: str | None = None
+        ) -> list[str]:
+        query = "SELECT event_id FROM events WHERE DATE(created_at) >= ? AND DATE(created_at) <= ?"
+        params = [start_date, end_date]
+        if event_type:
+            query += " AND type = ?"
+            params.append(event_type)
+        with self.lock, connect(self.db_path) as conn:
+            cursor = conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
         return [row[0] for row in rows]
 
     def get_event_by_id(self, event_id: str) -> tuple[str, BaseModel] | None:
