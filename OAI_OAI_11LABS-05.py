@@ -353,6 +353,13 @@ async def handle_events(message: PromptsMessage):
             return {"status": "deleted", "event_id": event_id}
         else:
             raise HTTPException(status_code=404, detail="Event niet gevonden of al verwijderd")
+        
+    elif message.action_type == "set_specific_state":    
+        event_id = message.payload.get("event_id")       
+        if not event_id:
+            raise HTTPException(status_code=400, detail="event_id ontbreekt")
+        event_manager.set_setting("specific_conversation_id", event_id)
+        return {"status": "ok", "message": f"Specifieke conversatie ingesteld op {event_id}"}
                
     elif message.action_type == "get_list":
         list_id = message.payload.get("list_id")
@@ -1093,7 +1100,12 @@ def save_conversation_state() -> str:
 # put this after the function definition, because it needs to be defined first
 keyboard.add_hotkey('ctrl+shift+o', save_conversation_state)
 
-def use_specific_conversation_state(event_id: str):
+def use_specific_conversation_state():
+    event_id = event_manager.get_setting("specific_conversation_id")
+    if not event_id:
+        print("Geen specifieke conversation ID gevonden in settings.")
+        return
+
     print(f"Loading specific conversation state: {event_id}")
     result = event_manager.get_event_by_id(event_id)
     if not result:
@@ -1108,21 +1120,17 @@ def use_specific_conversation_state(event_id: str):
         print(f"Event type '{event_type}' is geen ConversationState.")
         return
 
-    state: ConversationState = model  # type hint for clarity
+    state: ConversationState = model
 
-    # Laad summary
     communication_manager.load_summary_sync(state.summary)
     print(f"Conversation summary: {state.summary}")
 
-    # Laad messages (tot en met index)
     messages = event_manager.load_list(state.messages_list_file)
     communication_manager.set_messages_sync(messages[:state.message_upto_index + 1])
     print(f"{state.message_upto_index + 1} messages geladen.")
 
-    # Laad prompts op basis van modus
     prompt_manager.load_default_prompts_sync(state.last_mode)
 
-    # Update sessie state
     communication_manager.parent_conversation_id = state.id
     communication_manager.origin_event_id = state.origin_event_id
     communication_manager.current_mode = state.last_mode
