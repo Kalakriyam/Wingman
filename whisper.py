@@ -7,6 +7,7 @@ import dotenv
 import threading
 from termcolor import colored
 from groq import AsyncGroq
+from groq import PermissionDeniedError
 from pydub import AudioSegment
 from io import BytesIO
 
@@ -84,18 +85,27 @@ class WhisperTranscriber:
     async def transcribe_audio(self):
         mp3_buffer = await self.save_audio()
         print("\r" + " " * len(f">>>>>>  Listening...  <<<<<<<") + "\r<<<<<<  Transcribing  >>>>>>", end='')
-        
-        # Direct async call to API client
-        transcription_response = await self.client.audio.transcriptions.create(
-            file=("audio.mp3", mp3_buffer),
-            model="whisper-large-v3-turbo",
-            # model="whisper-1",
+
+        try:
+            transcription_response = await self.client.audio.transcriptions.create(
+                file=("audio.mp3", mp3_buffer),
+                model="whisper-large-v3-turbo",
+                # model="whisper-1",
             # model="gpt-4o-transcribe",
             # prompt="Bülent, schattenbout, Obsidian, Aşk, Enver"
             # language="nl"
-        )
-        
-        return transcription_response.text
+            )
+            return transcription_response.text
+
+        except PermissionDeniedError as e:
+            print("\n❌ Geen toegang tot Groq API.     Mogelijk door VPN of netwerkrestricties.")
+            print("   ➤ Zet je VPN uit of controleer je netwerkverbinding.")
+            print(f"   [403] {e}")
+            return None
+
+        except Exception as e:
+            print(f"\n⚠️ Onverwachte fout tijdens transcriiptie: {type(e).__name__}: {e}")
+            return None
 
     # ✅ Nieuwe event-driven key handler setup
     def setup_key_handlers(self):

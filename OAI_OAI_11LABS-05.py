@@ -360,6 +360,13 @@ async def handle_events(message: PromptsMessage):
             raise HTTPException(status_code=400, detail="event_id ontbreekt")
         event_manager.set_setting("specific_conversation_id", event_id)
         return {"status": "ok", "message": f"Specifieke conversatie ingesteld op {event_id}"}
+
+    elif message.trigger_type == "get_specific_state":
+        event_id = event_manager.get_setting("specific_conversation_id")
+        if event_id:
+            return {"status": "ok", "message": "Specifieke conversatie opgehaald", "event_id": event_id}  
+        else:
+            raise HTTPException(status_code=404, detail="Geen specifieke conversatie ingesteld")
                
     elif message.action_type == "get_list":
         list_id = message.payload.get("list_id")
@@ -1106,7 +1113,7 @@ def use_specific_conversation_state():
         print("Geen specifieke conversation ID gevonden in settings.")
         return
 
-    print(f"Loading specific conversation state: {event_id}")
+    # print(f"Loading specific conversation state: {event_id}")
     result = event_manager.get_event_by_id(event_id)
     if not result:
         print(f"Geen geldig event gevonden voor ID: {event_id}")
@@ -1123,11 +1130,11 @@ def use_specific_conversation_state():
     state: ConversationState = model
 
     communication_manager.load_summary_sync(state.summary)
-    print(f"Conversation summary: {state.summary}")
+    
 
     messages = event_manager.load_list(state.messages_list_file)
     communication_manager.set_messages_sync(messages[:state.message_upto_index + 1])
-    print(f"{state.message_upto_index + 1} messages geladen.")
+    # print(f"{state.message_upto_index + 1} messages geladen.")
 
     prompt_manager.load_default_prompts_sync(state.last_mode)
 
@@ -1135,7 +1142,8 @@ def use_specific_conversation_state():
     communication_manager.origin_event_id = state.origin_event_id
     communication_manager.current_mode = state.last_mode
 
-    print(f"Conversation state '{state.id}' geladen.")
+    print(f"{state.id} geladen ({state.message_upto_index + 1} messages)")
+    print(f"Summary: {state.summary}")
 
 # Register the hotkey
 keyboard.add_hotkey('ctrl+shift+0', use_specific_conversation_state)
@@ -2638,8 +2646,7 @@ async def main():
             await communication_manager.add_assistant_message(response_text)
 
     finally:
-        logging.warning("Shutdown complete.")
-        sys.exit(0)
+        logging.warning("Main loop finished.")
 
 async def start_uvicorn():
     config = uvicorn.Config(app, host="127.0.0.1", port=5001, log_level="error")
