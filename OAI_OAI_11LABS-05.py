@@ -304,7 +304,7 @@ async def handle_message(message: Message):
 
 @app.post('/update_voice')
 async def update_voice(request: VoiceUpdateRequest):
-    update_voice_id(request.voice_id, request.voice_name)
+    await update_voice_id(request.voice_id, request.voice_name)
     await generate_model_audio_segments()
     return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
 
@@ -474,10 +474,12 @@ async def generate_model_audio_segments():
     tasks = [load_model_segment(m) for m in model_options]
     await asyncio.gather(*tasks)
 
-def update_voice_id(new_voice_id: str, new_name: str):
+
+async def update_voice_id(voice_id: str, voice_name: str):       
     global VOICE_ID
-    VOICE_ID = new_voice_id
-    print(f"Stem bijgewerkt naar: {new_name}")
+    VOICE_ID = voice_id
+    print(f"Stem bijgewerkt naar: {voice_name}")
+
 
 def clear_clipboard():
     """
@@ -490,73 +492,6 @@ def clear_clipboard():
     print("Clipboard cleared successfully.")
 
 keyboard.add_hotkey('ctrl+shift+c', clear_clipboard)
-
-class RedirectStdoutToGUI:
-    def __init__(self, text_widget):
-        self.text_widget = text_widget
-        self.line_start = "1.0"  # Track the start of the current line
-
-    def write(self, message):
-        if '\r' in message:
-            # Handle carriage return by deleting current line and writing new content
-            parts = message.split('\r')
-            
-            # Delete the current line
-            line_end = self.text_widget.index(f"{self.line_start} lineend")
-            self.text_widget.delete(self.line_start, line_end)
-            
-            # Insert the last part after the carriage return
-            self.text_widget.insert(self.line_start, parts[-1])
-        else:
-            # Regular insertion
-            self.text_widget.insert(tk.END, message)
-            
-            # Update line_start if we're at a new line
-            if message.endswith('\n'):
-                self.line_start = self.text_widget.index(tk.END + " linestart")
-                
-        self.text_widget.see(tk.END)
-
-    def flush(self):
-        pass
-
-async def gui_loop():
-    root = tk.Tk()
-    root.title("Conversatie Interface")
-    root.overrideredirect(True)  # Removes the title bar
-    
-    # Get screen dimensions
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-    
-    # Calculate window dimensions (half width, full height)
-    window_width = screen_width // 2
-    window_height = screen_height
-    
-    # Position the window in the right half of the screen
-    # Starting from the middle-top (x=screen_width//2, y=0)
-    # and extending to the bottom-right corner
-    x_position = screen_width // 2
-    y_position = 0
-    
-    # Set the window size and position
-    root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
-    
-    text_output = tk.Text(root, wrap='word', font=("TkDefaultFont", 22), bg='black', fg='white', insertbackground='white')
-    text_output.pack(expand=True, fill='both')
-
-    sys.stdout = RedirectStdoutToGUI(text_output)
-
-    print("Welkom Alexander! Onze gedeelde ruimte is nu helder en rustig.")
-    print("Alles wat je print verschijnt hier.")
-
-    try:
-        while True:
-            root.update()
-            await asyncio.sleep(0.01)  # korte pauze om andere async taken ruimte te geven
-    except tk.TclError:
-        print("GUI afgesloten.")
-
 
 # async def first_compound_action():
 #     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -1142,8 +1077,8 @@ def use_specific_conversation_state():
     communication_manager.origin_event_id = state.origin_event_id
     communication_manager.current_mode = state.last_mode
 
-    print(f"{state.id} geladen ({state.message_upto_index + 1} messages)")
-    print(f"Summary: {state.summary}")
+    print(f"\n\n{state.id} geladen ({state.message_upto_index + 1} messages)")
+    print(f"\nSummary: {state.summary}")
 
 # Register the hotkey
 keyboard.add_hotkey('ctrl+shift+0', use_specific_conversation_state)
@@ -2187,6 +2122,12 @@ class CommunicationManager:
     async def set_current_mode_async(self, mode: str):
         async with self._lock:
             self.current_mode = mode
+            await prompt_manager.reload_default_prompts(mode, mode)
+            voice = await prompt_manager.get_profile_voice(mode)
+            if voice:
+                await update_voice_id(voice_id=voice, voice_name=mode)  # of gebruik voice als naam ook
+                await generate_model_audio_segments()
+
 
     async def get_current_mode_async(self) -> str:
         async with self._lock:

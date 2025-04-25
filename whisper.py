@@ -98,14 +98,14 @@ class WhisperTranscriber:
             return transcription_response.text
 
         except PermissionDeniedError as e:
-            print("\n❌ Geen toegang tot Groq API.     Mogelijk door VPN of netwerkrestricties.")
-            print("   ➤ Zet je VPN uit of controleer je netwerkverbinding.")
-            print(f"   [403] {e}")
-            return None
+            print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + "\n❌ Geen toegang tot Groq spraakherkenning.")
+            print("➤ Zet je VPN uit of controleer je netwerkverbinding.")
+            # print(f"   [403] {e}")
+            return
 
         except Exception as e:
-            print(f"\n⚠️ Onverwachte fout tijdens transcriiptie: {type(e).__name__}: {e}")
-            return None
+            print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + f"\n⚠️ Onverwachte fout tijdens transcriiptie: {type(e).__name__}: {e}")
+            return
 
     # ✅ Nieuwe event-driven key handler setup
     def setup_key_handlers(self):
@@ -129,6 +129,8 @@ class WhisperTranscriber:
             self.frames = []
             await self.start_recording('f4')
             transcription = await self.transcribe_audio()
+            if not transcription:
+                continue
             print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + colored(transcription, "red"))
             return transcription
 
@@ -138,6 +140,8 @@ class WhisperTranscriber:
             self.frames = []
             await self.start_recording('f10')
             transcription = await self.transcribe_audio()
+            if not transcription:
+                continue
             print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + colored(transcription, "green") + "\n")
             return transcription                 
 
@@ -147,6 +151,8 @@ class WhisperTranscriber:
             self.frames = []
             await self.start_recording('f9')
             transcription = await self.transcribe_audio()
+            if not transcription:
+                continue
             print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + colored(transcription, "yellow"))
             return transcription
 
@@ -156,6 +162,8 @@ class WhisperTranscriber:
             self.frames = []
             await self.start_recording('f7')
             transcription = await self.transcribe_audio()
+            if not transcription:
+                continue
             print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + colored(transcription, "blue"))
             return transcription
 
@@ -165,6 +173,8 @@ class WhisperTranscriber:
             self.frames = []
             await self.start_recording('scroll_lock')
             transcription = await self.transcribe_audio()
+            if not transcription:
+                continue  # niks teruggeven, gewoon wachten op volgende input
             print("\r" + " " * len(">>>>>>  Transcribing  <<<<<<<") + "\r" + colored(transcription, "green"))
             return transcription
 
