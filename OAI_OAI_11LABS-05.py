@@ -33,6 +33,7 @@ from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
 from ultimate_playback import play
 from db_helpers import list_modes, add_mode, delete_mode
+from termcolor import colored
 from openai import AsyncOpenAI
 from whisper import WhisperTranscriber
 from elevenlabs.client import AsyncElevenLabs
@@ -1085,7 +1086,7 @@ keyboard.add_hotkey('ctrl+shift+0', use_specific_conversation_state)
 
 
 def load_latest_conversation_state():
-    print("Loading latest conversation state...")
+    print(f"\n" + colored("Loading latest conversation...", "blue"))
     result = event_manager.get_latest_event("ConversationState")
     if not result:
         print("Geen conversation state gevonden. Start met lege sessie.")
@@ -1097,12 +1098,10 @@ def load_latest_conversation_state():
 
     # Laad summary
     communication_manager.load_summary_sync(state.summary)
-    print(f"Conversation summary: {state.summary}")
 
     # Laad messages (tot en met index)
     messages = event_manager.load_list(state.messages_list_file)
     communication_manager.set_messages_sync(messages[:state.message_upto_index + 1])
-    print(f"{state.message_upto_index + 1} messages geladen.")
 
     # Laad prompts op basis van opgeslagen modus     
     prompt_manager.load_default_prompts_sync(state.last_mode)
@@ -1112,7 +1111,9 @@ def load_latest_conversation_state():
     communication_manager.origin_event_id = state.origin_event_id
     communication_manager.current_mode = state.last_mode  # ✅ correct veld
 
-    print(f"Conversation state '{state.id}' geladen.")
+    print(colored(f"{state.message_upto_index + 1} messages geladen.", "blue"))
+    print(colored(f"\nSummary: \n{state.summary}", "yellow"))
+    # print(f"Conversation state '{state.id}' geladen.")
 
 keyboard.add_hotkey('ctrl+shift+r', load_latest_conversation_state)
 
