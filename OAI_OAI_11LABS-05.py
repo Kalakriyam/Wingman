@@ -418,7 +418,41 @@ async def handle_events(message: PromptsMessage):
             return {"status": "ok", "message": "Specifieke conversatie opgehaald", "event_id": event_id}  
         else:
             raise HTTPException(status_code=404, detail="Geen specifieke conversatie ingesteld")
-               
+    
+    elif message.action_type == "open_event":
+        event_id = message.payload.get("event_id")
+        if not event_id:
+            raise HTTPException(status_code=400, detail="event_id ontbreekt")
+        use_specific_conversation_state(event_id)
+        return {"status": "ok", "message": f"Event {event_id} geopend"}
+    
+    elif message.action_type == "save_summary":
+        event_id = message.payload.get("event_id")
+        event_type = message.payload.get("event_type")
+        new_summary = message.payload.get("summary")
+
+        if not event_id or not event_type or new_summary is None:
+            raise HTTPException(status_code=400, detail="event_id, event_type of summary ontbreekt")
+
+        with event_manager.lock, connect(event_manager.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT content FROM events WHERE event_id = ? AND type = ?", 
+                (event_id, event_type))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Event niet gevonden")
+
+            content = orjson.loads(row[0])
+            content['summary'] = new_summary
+            content_json = orjson.dumps(content).decode('utf-8')
+
+            conn.execute(
+                "UPDATE events SET content = ? WHERE event_id = ? AND type = ?", 
+                (content_json, event_id, event_type))
+            conn.commit()
+
+        return {"status": "summary updated", "event_id": event_id}
+    
     elif message.action_type == "get_list":
         list_id = message.payload.get("list_id")
         if not list_id:
@@ -1093,11 +1127,13 @@ def save_conversation_state() -> str:
 # put this after the function definition, because it needs to be defined first
 keyboard.add_hotkey('ctrl+shift+o', save_conversation_state)
 
-def use_specific_conversation_state():
-    event_id = event_manager.get_setting("specific_conversation_id")
+def use_specific_conversation_state(event_id: str | None = None):
     if not event_id:
-        print("Geen specifieke conversation ID gevonden in settings.")
-        return
+        event_id = event_manager.get_setting("specific_conversation_id")
+        if not event_id:
+            # overweeg een melding te geven en de laatste conversatie in te laden
+            print("Geen specifieke conversation ID gevonden in settings.")
+            return
 
     # print(f"Loading specific conversation state: {event_id}")
     result = event_manager.get_event_by_id(event_id)
@@ -1193,7 +1229,7 @@ async def save_idea_event():
             "type": "idea",
             "source": {"content": user_input}}
         event_id = event_manager.save_event("idea", event_data, event_id=timestamp_id)
-        print(f"Idee opgeslagen in database met ID: {event_id}")
+        print(f"\nIdee opgeslagen in database met ID: {event_id}")
 
         # 2. Stuur naar Obsidian via globale sessie
         obsidian_markdown = f"""#idee
@@ -2238,11 +2274,16 @@ class EventManager:
             event_id = datetime.now().strftime("%Y%m%d%H%M%S")
         content_json = orjson.dumps(content).decode('utf-8')
         with self.lock, connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO events (event_id, type, content) VALUES (?, ?, ?)",
-                (event_id, event_type, content_json))
+            conn.execute("""
+                INSERT INTO events (event_id, type, content)
+                VALUES (?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                    type=excluded.type,
+                    content=excluded.content
+            """, (event_id, event_type, content_json))
             conn.commit()
         return event_id
+
 
     def get_latest_event(self, event_type: str) -> tuple[str, BaseModel] | None:
         with self.lock, connect(self.db_path) as conn:
