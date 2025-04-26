@@ -2132,7 +2132,7 @@ class CommunicationManager:
     async def set_current_mode_async(self, mode: str):
         async with self._lock:
             self.current_mode = mode
-            await prompt_manager.reload_default_prompts(mode, mode)
+            await prompt_manager.load_default_prompts(mode)
             voice = await prompt_manager.get_profile_voice(mode)
             if voice:
                 await update_voice_id(voice_id=voice, voice_name=mode)  # of gebruik voice als naam ook
