@@ -158,6 +158,9 @@ class VoiceUpdateRequest(BaseModel):
     voice_id: str
     voice_name: str
 
+class ReloadRequest(BaseModel):
+    profile_name: str
+
 class MessageType(Enum):
     EXCHANGE = "exchange"
     TRIGGER = "trigger"
@@ -309,13 +312,16 @@ async def update_voice(request: VoiceUpdateRequest):
     await generate_model_audio_segments()
     return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
 
+
+
 @app.post('/reload_default_prompts')
-async def reload_default_prompts(refresh: DefaultPrompts):
-    if refresh.system_prompt and refresh.dynamic_context:
-        await prompt_manager.reload_default_prompts(refresh.system_prompt, refresh.dynamic_context)
-        print ("Verzoek tot reload succesvol ontvangen")
+async def reload_default_prompts(request: ReloadRequest):
+    print("verzoek tot reload")
+    if request.profile_name:
+        print("verzoek had een profielnaam")
+        await prompt_manager.load_default_prompts(request.profile_name)
+        print("Verzoek tot reload succesvol ontvangen")
         return {"message": "Verzoek tot reload succesvol ontvangen"}
-        
     else:
         raise HTTPException(status_code=400, detail="Bericht incompleet")
 
@@ -1112,7 +1118,10 @@ def load_latest_conversation_state():
     communication_manager.current_mode = state.last_mode  # ✅ correct veld
 
     print(colored(f"{state.message_upto_index + 1} messages geladen.", "blue"))
-    print(colored(f"\nSummary: \n{state.summary}", "yellow"))
+    if state.summary:
+        print(colored(f"\nSummary: \n{state.summary}", "yellow"))
+    else:
+        print(colored("Summary: leeg.", "yellow"))
     # print(f"Conversation state '{state.id}' geladen.")
 
 keyboard.add_hotkey('ctrl+shift+r', load_latest_conversation_state)
@@ -2426,6 +2435,14 @@ class PromptManager:
         self.dynamic_context = self.get_dynamic_context_sync(profile_name)
 
     # --- Asynchronous methods for FastAPI endpoints ---
+    async def load_default_prompts(self, profile_name="default"):
+        print("load_default_prompts methode aangeroepen")
+        # async with self._lock:
+        self.system_prompt = await self.get_system_prompt(profile_name)
+        self.dynamic_context = await self.get_dynamic_context(profile_name)
+        print("system_prompt en dynamic_context geladen")
+
+
     async def list_prompt_names(self) -> list[str]:
         async with self._lock:
             async with aiosqlite.connect(self.db_path) as db:
@@ -2456,6 +2473,7 @@ class PromptManager:
                 await db.execute("DELETE FROM prompts WHERE prompt_name = ?", (prompt_name,))
                 await db.commit()
             print(f"Prompt-profiel '{prompt_name}' verwijderd uit database.")
+
         
     async def get_system_prompt(self, prompt_name: str) -> str:
         async with self._lock:
@@ -2519,9 +2537,6 @@ class PromptManager:
                 await db.commit()
                 print(f"Prompt-profiel '{profile.name}' opgeslagen in database.")
 
-    async def reload_default_prompts(self, new_system_prompt: str, new_dynamic_context: str, summary=""):
-        self.system_prompt = await self.get_system_prompt(new_system_prompt)
-        self.dynamic_context = await self.get_dynamic_context(new_dynamic_context, summary=summary)
 
     async def set_default_system_prompt(self, new_system_prompt: str):
         async with self._lock:
