@@ -360,7 +360,51 @@ async def handle_events(message: PromptsMessage):
             return {"status": "deleted", "event_id": event_id}
         else:
             raise HTTPException(status_code=404, detail="Event niet gevonden of al verwijderd")
-        
+    
+    elif message.action_type == "update_event":
+        event_id = message.payload.get("event_id")
+        summary = message.payload.get("summary")
+        details = message.payload.get("details")
+
+        if not event_id:
+            raise HTTPException(status_code=400, detail="event_id ontbreekt")
+
+        # Haal het bestaande event op
+        result = event_manager.get_event_by_id(event_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Event niet gevonden")
+
+        event_type, event_obj = result
+        event_updated = False  # Flag om te checken of we het event moeten opslaan
+
+        # Update de summary als die bestaat
+        if hasattr(event_obj, "summary") and summary is not None:
+            event_obj.summary = summary
+            event_updated = True
+
+        # Update de messages_list_file als het een ConversationState is
+        if event_type == "ConversationState" and hasattr(event_obj, "messages_list_file"):
+            list_id = event_obj.messages_list_file
+            if list_id and details is not None:
+                # Parse de details terug naar messages
+                messages = []
+                pattern = r"--- (USER|ASSISTANT): ---\n"
+                splits = regex.split(pattern, details)
+                for i in range(1, len(splits) - 1, 2):
+                    role = splits[i].strip().lower()
+                    content = splits[i + 1].strip()
+                    messages.append({"role": role, "content": content})
+
+                message_list = MessageList(id=list_id, messages=messages)
+                event_manager.save_list(message_list)
+                event_updated = True  # ✅ ook hier!
+
+        # Alleen opslaan als er echt iets veranderd is
+        if event_updated:
+            event_manager.save_event(event_type, event_obj.model_dump(), event_id=event_id)
+
+        return {"status": "updated", "event_id": event_id}
+
     elif message.action_type == "set_specific_state":    
         event_id = message.payload.get("event_id")       
         if not event_id:
