@@ -1,3 +1,5 @@
+# Ignore cache files
+__pycache__/
 # Ignore environment files
 .env
 # Ignore system files
