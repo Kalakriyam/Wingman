@@ -1579,7 +1579,7 @@ async def manage_audio_playback():
             
             audio_order += 1
 
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.05)
 
 async def process_midi_as_audio(midi_command, order):
     # Create a special marker in audio_segments to maintain ordering
