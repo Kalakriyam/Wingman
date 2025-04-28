@@ -311,10 +311,9 @@ async def handle_message(message: Message):
 
 @fastapi_app.post('/update_voice')
 async def update_voice(request: VoiceUpdateRequest):
-    await update_voice_id(request.voice_id, request.voice_name)
+    await communication_manager.update_voice_id(request.voice_name)
     await generate_model_audio_segments()
     return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
-
 
 
 @fastapi_app.post('/reload_default_prompts')
@@ -511,12 +510,13 @@ current_model_index = 0
 
 
 async def fetch_elevenlabs_audio(text: str) -> AudioSegment:
+    voice_id = communication_manager.voice_id
     """
     Asynchronously makes a POST to ElevenLabs to synthesize 'text', using a
     semaphore to limit concurrent requests.  Returns a pydub AudioSegment
     (or None on failure).
     """
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json",
@@ -561,12 +561,6 @@ async def generate_model_audio_segments():
     # Start all tasks in parallel
     tasks = [load_model_segment(m) for m in model_options]
     await asyncio.gather(*tasks)
-
-
-async def update_voice_id(voice_id: str, voice_name: str):       
-    global VOICE_ID
-    VOICE_ID = voice_id
-    print(f"Stem bijgewerkt naar: {voice_name}")
 
 
 def clear_clipboard():
@@ -1470,9 +1464,10 @@ def split_into_sentences(text):
 #         print(f"Error in TTS requestfor sentence {order}: {e}")
 
 async def tts_request(sentence, order):
+    voice_id = communication_manager.voice_id
     try:
         async with tts_semaphore:
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
             headers = {
                 "xi-api-key": ELEVENLABS_API_KEY,
                 "Content-Type": "application/json",
@@ -2126,7 +2121,8 @@ class CommunicationManager:
         self.obsidian_content: str = ""
         self.obsidian_title: str = ""
         self.midi_details: str = ""
-        self.voice_id: str = "Robert"  # Default stemnaam/code
+        self.voice_name: str = "Robert"  # Default stemnaam
+        self.voice_id: str = "BtWabtumIemAotTjP5sk" # Default stem-code
         self._lock = asyncio.Lock()
         self.summary: str = ""
 
@@ -2134,7 +2130,54 @@ class CommunicationManager:
         self.current_mode: str = "default"
         self.parent_conversation_id: str | None = None
         self.origin_event_id: str | None = None
+    
 
+    async def update_voice_id(self, voice_name: str):
+        async with self._lock:
+            try:
+                async with aiosqlite.connect("modes_and_prompts.db") as db:
+                    cursor = await db.execute(
+                        "SELECT value FROM settings WHERE key = ?", ("voices",))
+                    row = await cursor.fetchone()
+                    await cursor.close()
+
+                if not row:
+                    print("Fout: geen voices gevonden in database.")
+                    return
+
+                voices_dict = json.loads(row[0])
+                voice_code = voices_dict.get(voice_name)
+
+                if not voice_code:
+                    print(f"Fout: stem '{voice_name}' niet gevonden in voices-lijst.")
+                    return
+
+                self.voice_id = voice_code  # <-- de code      
+                self.voice_name = voice_name  # <-- de naam
+                print(f"Stem bijgewerkt naar {voice_name} ({voice_code})")
+
+            except Exception as e:
+                print(f"Fout bij updaten van voice_id: {e}")
+
+    async def get_voices_dict(self) -> dict[str, str]:
+        async with self._lock:
+            try:
+                async with aiosqlite.connect("modes_and_prompts.db") as db:
+                    cursor = await db.execute(
+                        "SELECT value FROM settings WHERE key = ?", ("voices",))
+                    row = await cursor.fetchone()
+                    await cursor.close()
+
+                if not row:
+                    print("Fout: geen voices gevonden in database.")
+                    return {}
+
+                voices_dict = json.loads(row[0])
+                return voices_dict
+
+            except Exception as e:
+                print(f"Fout bij ophalen van voices-lijst: {e}")
+                return {}
     async def handle_action(self, message: Message) -> str:
         async with self._lock:
             if message.action_type == ActionType.PUSH_SUMMARY:
@@ -2221,11 +2264,10 @@ class CommunicationManager:
         async with self._lock:
             self.current_mode = mode
             await prompt_manager.load_default_prompts(mode)
-            voice = await prompt_manager.get_profile_voice(mode)
-            if voice:
-                await update_voice_id(voice_id=voice, voice_name=mode)  # of gebruik voice als naam ook
+            voice_name = await prompt_manager.get_profile_voice(mode)
+            if voice_name:
+                await self.update_voice_id(voice_name)
                 await generate_model_audio_segments()
-
 
     async def get_current_mode_async(self) -> str:
         async with self._lock:

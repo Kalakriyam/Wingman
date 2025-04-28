@@ -37,9 +37,11 @@ ACTION_PUSH_CONVERSATION = "push_conversation" # New
 class VoiceUI:
     def __init__(self, root, voices, communication_manager, prompt_manager, event_manager):
         self.root = root
-        self.voices = voices
-        self.voice_names = list(voices.keys())
         self.communication_manager = communication_manager
+        # --- Load voices dynamically ---
+        self.voices = asyncio.run(self.communication_manager.get_voices_dict())
+        self.voice_names = list(self.voices.keys())
+        self.current_index = 0
         self.prompt_manager = prompt_manager
         self.event_manager = event_manager
         self.current_index = 0
@@ -781,37 +783,14 @@ class VoiceUI:
 
     def send_current_voice(self):
         self._clear_messages()
-        voice_id = self.voices[self.voice_names[self.current_index]]
         voice_name = self.voice_names[self.current_index]
-        url = f"{SERVER_BASE_URL}{UPDATE_VOICE_ENDPOINT}"
-        headers = {"Content-Type": "application/json"}
-        data = {"voice_id": voice_id, "voice_name": voice_name}
 
         try:
-            # Disable button during request
-            self.send_button.config(state=tk.DISABLED)
-            self.root.update_idletasks()
-
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            try:
-                response_data = response.json()
-                self.status_label.config(text=response_data.get('message', 'Voice updated (No message)'))
-                print(f"Successfully sent voice ID ({voice_id}) for {voice_name}, Response: {response_data}")
-            except json.JSONDecodeError:
-                self.status_label.config(text="Voice update successful (non-JSON response)")
-                print(f"Successfully sent voice ID ({voice_id}). Status: {response.status_code}, Response: {response.text}")
-
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Voice update request timed out.")
-            print(f"Error: Timeout sending voice update to {url}")
-        except requests.exceptions.RequestException as e:
-            print(f"Error sending voice update request: {e}")
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Voice Update Error: {error_details}")
-        finally:
-            # Re-enable button
-             self.send_button.config(state=tk.NORMAL)
+            # Update voice in CommunicationManager
+            asyncio.run(self.communication_manager.update_voice_id(voice_name))
+            self.status_label.config(text=f"Stem bijgewerkt naar {voice_name}")
+        except Exception as e:
+            self.error_label.config(text=f"Fout bij bijwerken stem: {e}")
 
              
     def _refresh_available_modes(self):
