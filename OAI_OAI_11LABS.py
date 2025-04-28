@@ -2126,6 +2126,7 @@ class CommunicationManager:
         self.obsidian_content: str = ""
         self.obsidian_title: str = ""
         self.midi_details: str = ""
+        self.voice_id: str = "Robert"  # Default stemnaam/code
         self._lock = asyncio.Lock()
         self.summary: str = ""
 
