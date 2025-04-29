@@ -90,10 +90,10 @@ class WhisperTranscriber:
         print("\r" + " " * len(f">>>>>>  Listening...  <<<<<<<") + "\r<<<<<<  Transcribing  >>>>>>", end='')
 
         try:
-            transcription_response = await self.openai_client.audio.transcriptions.create(
+            transcription_response = await self.client.audio.transcriptions.create(
                 file=("audio.mp3", mp3_buffer),
-                # model="whisper-large-v3-turbo",
-                model="whisper-1",
+                model="whisper-large-v3-turbo",
+                # model="whisper-1",
             # model="gpt-4o-transcribe",
             # prompt="Bülent, schattenbout, Obsidian, Aşk, Enver"
             # language="nl"
