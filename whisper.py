@@ -92,11 +92,10 @@ class WhisperTranscriber:
         try:
             transcription_response = await self.client.audio.transcriptions.create(
                 file=("audio.mp3", mp3_buffer),
-                model="whisper-large-v3-turbo",
+                model="whisper-large-v3-turbo"
                 # model="whisper-1",
-            # model="gpt-4o-transcribe",
-            # prompt="Bülent, schattenbout, Obsidian, Aşk, Enver"
-            # language="nl"
+                # model="gpt-4o-transcribe",
+                # model="gpt-4o-mini-transcribe"
             )
             return transcription_response.text
 

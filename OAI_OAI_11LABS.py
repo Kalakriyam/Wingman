@@ -49,7 +49,7 @@ from voice_ui import VoiceUI
 
 dotenv.load_dotenv()
 
-# logging.basicConfig(level=logging.CRITICAL, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.CRITICAL, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 # Add this right after your imports and global definitions
@@ -2790,44 +2790,41 @@ if __name__ == "__main__":
     # Start GUI in aparte thread
     threading.Thread(target=start_voice_ui, daemon=True).start()
     
-    
     async def run_all():
-        await initialize_http_session()
-        server = asyncio.create_task(start_uvicorn())
-        main_task = asyncio.create_task(main())
-        playback_task = asyncio.create_task(manage_audio_playback())
-        tasks_agent_task = asyncio.create_task(tasks_agent())
-        obsidian_agent_task = asyncio.create_task(obsidian_agent())
-        save_idea_event_task = asyncio.create_task(save_idea_event())
-        save_journal_event_task = asyncio.create_task(save_journal_event())
-        text_consumer_task = asyncio.create_task(text_processor())
-        tool_consumer_task = asyncio.create_task(tool_processor())
-        async def shutdown_gui_when_done():
+        try:
+            await initialize_http_session()
+            server = asyncio.create_task(start_uvicorn())
+            main_task = asyncio.create_task(main())
+            playback_task = asyncio.create_task(manage_audio_playback())
+            tasks_agent_task = asyncio.create_task(tasks_agent())
+            obsidian_agent_task = asyncio.create_task(obsidian_agent())
+            save_idea_event_task = asyncio.create_task(save_idea_event())
+            save_journal_event_task = asyncio.create_task(save_journal_event())
+            text_consumer_task = asyncio.create_task(text_processor())
+            tool_consumer_task = asyncio.create_task(tool_processor())
+
+            async def shutdown_gui_when_done():
+                await shutdown_event.wait()
+                if root:
+                    await asyncio.to_thread(root.destroy)
+
+            gui_shutdown_task = asyncio.create_task(shutdown_gui_when_done())
+
             await shutdown_event.wait()
-            if root:
-                await asyncio.to_thread(root.destroy)
 
-        gui_shutdown_task = asyncio.create_task(shutdown_gui_when_done())
+        except asyncio.CancelledError:
+            print("\n\nShutting the program down gracefully...")
+        except KeyboardInterrupt:
+            print("\n\nKeyboardInterrupt received. Shutting down...")
+        finally:
+            # Cancel alle taken
+            tasks = [
+                server, playback_task, obsidian_agent_task, tasks_agent_task, save_idea_event_task, save_journal_event_task,
+                main_task, text_consumer_task, tool_consumer_task, gui_shutdown_task]
+            for task in tasks:
+                task.cancel()
 
-        await shutdown_event.wait()
-
-        # Cancel alle taken
-        server.cancel()
-        playback_task.cancel()
-        obsidian_agent_task.cancel()
-        save_idea_event_task.cancel()
-        save_journal_event_task.cancel()
-        tasks_agent_task.cancel()
-        main_task.cancel()
-        text_consumer_task.cancel()
-        tool_consumer_task.cancel()
-        gui_shutdown_task.cancel()
-
-        await http_session_shutdown()
-        await asyncio.gather(
-            server, playback_task, obsidian_agent_task, tasks_agent_task,
-            main_task, text_consumer_task, tool_consumer_task, gui_shutdown_task,
-            return_exceptions=True
-    )
-        sys.exit(0)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await http_session_shutdown()
+            sys.exit(0)
     asyncio.run(run_all())
