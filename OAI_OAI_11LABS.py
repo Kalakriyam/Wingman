@@ -311,7 +311,7 @@ async def handle_message(message: Message):
 
 @fastapi_app.post('/update_voice')
 async def update_voice(request: VoiceUpdateRequest):
-    await communication_manager.update_voice_id(request.voice_name)
+    await communication_manager.push_voice_update(request.voice_name)
     await generate_model_audio_segments()
     return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
 
@@ -500,11 +500,11 @@ async def handle_events(message: PromptsMessage):
 
 # George = Yko7PKHZNXotIFUBG7I9
 
-VOICE_ID = "Yko7PKHZNXotIFUBG7I9"
+
 # MODEL_ID = "eleven_multilingual_v2"
 MODEL_ID = "eleven_flash_v2_5"
 # model_options = ["chatgpt-4o-latest","gpt-4o-2024-11-20", "gpt-4o-mini", "gpt-4.5-preview"]
-model_options = ["chatgpt-4o-latest", "gpt-4.1", "gpt-4.1-mini", "gpt-4.5-preview"]
+model_options = ["gpt-4o-2024-11-20", "chatgpt-4o-latest", "gpt-4.1", "gpt-4.1-mini", "gpt-4.5-preview"]
 
 current_model_index = 0
 
@@ -1070,7 +1070,10 @@ def reset_chat_history():
     communication_manager.set_messages_sync([])
     # system_prompt = await get_system_prompt("system_prompt.txt") # gaat niet, want dit is een sync functie
     # dynamic_context = await get_dynamic_context("dynamic_context.txt") # gaat niet, want dit is een sync functie
-    print("Chat history reset.")
+    current_mode = communication_manager.get_current_mode()
+    print("\nChat history reset.")
+    print(f"Current mode: {current_mode}")
+    
 
 keyboard.add_hotkey('ctrl+shift+9', reset_chat_history)
 
@@ -2132,52 +2135,23 @@ class CommunicationManager:
         self.origin_event_id: str | None = None
     
 
-    async def update_voice_id(self, voice_name: str):
+    async def push_voice_update(self, voice_name: str):
         async with self._lock:
-            try:
-                async with aiosqlite.connect("modes_and_prompts.db") as db:
-                    cursor = await db.execute(
-                        "SELECT value FROM settings WHERE key = ?", ("voices",))
-                    row = await cursor.fetchone()
-                    await cursor.close()
+            voice_code = await settings_manager.get_voice_code(voice_name)
+            if not voice_code:
+                print(f"Fout: stem '{voice_name}' niet gevonden in database.")
+                return
 
-                if not row:
-                    print("Fout: geen voices gevonden in database.")
-                    return
+            self.voice_id = voice_code
+            self.voice_name = voice_name
+            print(f"Stem bijgewerkt naar: {voice_name}")
 
-                voices_dict = json.loads(row[0])
-                voice_code = voices_dict.get(voice_name)
-
-                if not voice_code:
-                    print(f"Fout: stem '{voice_name}' niet gevonden in voices-lijst.")
-                    return
-
-                self.voice_id = voice_code  # <-- de code      
-                self.voice_name = voice_name  # <-- de naam
-                print(f"Stem bijgewerkt naar {voice_name} ({voice_code})")
-
-            except Exception as e:
-                print(f"Fout bij updaten van voice_id: {e}")
-
+    # niet meer actueel, leeggemaakt
     async def get_voices_dict(self) -> dict[str, str]:
-        async with self._lock:
-            try:
-                async with aiosqlite.connect("modes_and_prompts.db") as db:
-                    cursor = await db.execute(
-                        "SELECT value FROM settings WHERE key = ?", ("voices",))
-                    row = await cursor.fetchone()
-                    await cursor.close()
-
-                if not row:
-                    print("Fout: geen voices gevonden in database.")
-                    return {}
-
-                voices_dict = json.loads(row[0])
-                return voices_dict
-
-            except Exception as e:
-                print(f"Fout bij ophalen van voices-lijst: {e}")
-                return {}
+        # let op! SettingsManager heeft een methode get_all_voices()
+        # die wordt gebruikt in VoiceUI.py
+        return
+    
     async def handle_action(self, message: Message) -> str:
         async with self._lock:
             if message.action_type == ActionType.PUSH_SUMMARY:
@@ -2261,13 +2235,17 @@ class CommunicationManager:
                 print("Clipboard content added to last message.")
 
     async def set_current_mode_async(self, mode: str):
-        async with self._lock:
-            self.current_mode = mode
-            await prompt_manager.load_default_prompts(mode)
-            voice_name = await prompt_manager.get_profile_voice(mode)
-            if voice_name:
-                await self.update_voice_id(voice_name)
-                await generate_model_audio_segments()
+        await prompt_manager.load_default_prompts(mode)
+        print("default prompts geladen")
+        voice_name = await prompt_manager.get_profile_voice(mode)
+        print("wachten op voice_name")
+        if voice_name:
+            print("voice_name gevonden")
+            await self.push_voice_update(voice_name)
+            print("voice_name gepushed")
+            await generate_model_audio_segments()
+            print("audio segments gegenereerd")
+        self.current_mode = mode
 
     async def get_current_mode_async(self) -> str:
         async with self._lock:
@@ -2714,22 +2692,54 @@ class PromptManager:
     def get_current_dynamic_context(self):
         return self.dynamic_context
     
+class SettingsManager:
+    def __init__(self, db_path="settings_manager.db"):
+        self.db_path = db_path
+
+    async def get_voice_code(self, voice_name: str) -> str | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT code FROM voices WHERE name = ?", (voice_name,))
+            row = await cursor.fetchone()
+            await cursor.close()
+        return row[0] if row else None
+
+    async def get_all_voices(self) -> dict[str, str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT name, code FROM voices")
+            rows = await cursor.fetchall()
+            await cursor.close()
+        return {name: code for name, code in rows}
+
+    async def get_model_id(self, model_name: str) -> str | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT model_id FROM tts_models WHERE name = ?", (model_name,))      
+            row = await cursor.fetchone()
+            await cursor.close()
+        return row[0] if row else None
+
+    async def get_setting(self, key: str) -> str | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT value FROM general_settings WHERE key = ?", (key,))
+            row = await cursor.fetchone()
+            await cursor.close()
+        return row[0] if row else None
+
+    async def set_setting(self, key: str, value: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO general_settings (key, value) VALUES (?, ?)", 
+                (key, value))
+            await db.commit()
+    
 # === Voice UI ===
-voices = {
-    "Martin_int": "a5n9pJUnAhX4fn7lx3uo",
-    "Frank": "gFwlAMshRYWaSeoMt2md",
-    "Robert": "BtWabtumIemAotTjP5sk",
-    "George": "Yko7PKHZNXotIFUBG7I9",
-    "Educational_Elias": "bYS7cEY0uRew5lIOkGCu",
-    "Will": "bIHbv24MWmeRgasZH58o",
-    "David_conversational": "EozfaQ3ZX0esAp1cW5nG",
-    "Harrison": "fCxG8OHm4STbIsWe4aT9"
-}
 
     
 async def main():
     
-    os.system("cls")
+    # os.system("cls")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     
@@ -2766,7 +2776,7 @@ async def http_session_shutdown():
 def start_voice_ui():
     global root
     root = tk.Tk()
-    voice_ui_app = VoiceUI(root, voices, communication_manager, prompt_manager, event_manager)
+    voice_ui_app = VoiceUI(root, communication_manager, prompt_manager, event_manager, settings_manager)
     root.mainloop()
     
 if __name__ == "__main__":
@@ -2776,6 +2786,7 @@ if __name__ == "__main__":
     prompt_manager = PromptManager()
     prompt_manager.load_default_prompts_sync()
     event_manager = EventManager()
+    settings_manager = SettingsManager()
     # Start GUI in aparte thread
     threading.Thread(target=start_voice_ui, daemon=True).start()
     

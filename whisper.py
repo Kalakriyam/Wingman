@@ -7,6 +7,7 @@ import dotenv
 import threading
 from termcolor import colored
 from groq import AsyncGroq
+from openai import AsyncOpenAI
 from groq import PermissionDeniedError
 from pydub import AudioSegment
 from io import BytesIO
@@ -16,7 +17,9 @@ dotenv.load_dotenv()
 class WhisperTranscriber:
     def __init__(self):
         self.api_key = os.getenv('GROQ_API_KEY')
+        self.openai_api_key = os.getenv('OPENAI_API_KEY')
         self.client = AsyncGroq(api_key=self.api_key)
+        self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
         self.frames = []
         self.frames_lock = threading.Lock()
 
@@ -87,10 +90,10 @@ class WhisperTranscriber:
         print("\r" + " " * len(f">>>>>>  Listening...  <<<<<<<") + "\r<<<<<<  Transcribing  >>>>>>", end='')
 
         try:
-            transcription_response = await self.client.audio.transcriptions.create(
+            transcription_response = await self.openai_client.audio.transcriptions.create(
                 file=("audio.mp3", mp3_buffer),
-                model="whisper-large-v3-turbo",
-                # model="whisper-1",
+                # model="whisper-large-v3-turbo",
+                model="whisper-1",
             # model="gpt-4o-transcribe",
             # prompt="Bülent, schattenbout, Obsidian, Aşk, Enver"
             # language="nl"

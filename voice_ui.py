@@ -35,15 +35,19 @@ ACTION_PUSH_CONVERSATION = "push_conversation" # New
 # --- UI ---
 
 class VoiceUI:
-    def __init__(self, root, voices, communication_manager, prompt_manager, event_manager):
+    def __init__(self, root, communication_manager, prompt_manager, event_manager, settings_manager):
         self.root = root
         self.communication_manager = communication_manager
-        # --- Load voices dynamically ---
-        self.voices = asyncio.run(self.communication_manager.get_voices_dict())
-        self.voice_names = list(self.voices.keys())
-        self.current_index = 0
         self.prompt_manager = prompt_manager
         self.event_manager = event_manager
+        self.settings_manager = settings_manager
+        # --- Load voices from settings ---
+        self.voices = asyncio.run(self.settings_manager.get_all_voices())
+        self.voice_names = list(self.voices.keys())
+
+        if not self.voice_names:
+            self.voice_names = ["(No Voices Found)"]
+            self.voices = {"(No Voices Found)": "dummy_voice_id"}
         self.current_index = 0
         self.summary_text = None
         self.summary_scrollbar = None
@@ -329,21 +333,9 @@ class VoiceUI:
             self.error_label.config(text="Geen modus geselecteerd.")
             return
 
-        url = f"{SERVER_BASE_URL}/mode"        
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": "set_mode",
-            "payload": {"name": selected_modus}
-    }
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            self.status_label.config(text=f"Modus gewisseld naar '{selected_modus}'")     
+            asyncio.run(self.communication_manager.set_current_mode_async(selected_modus))
+            self.status_label.config(text=f"Modus gewisseld naar '{selected_modus}'")
         except Exception as e:
             self.error_label.config(text=f"Fout bij wisselen modus: {e}")
 
@@ -786,8 +778,7 @@ class VoiceUI:
         voice_name = self.voice_names[self.current_index]
 
         try:
-            # Update voice in CommunicationManager
-            asyncio.run(self.communication_manager.update_voice_id(voice_name))
+            asyncio.run(self.communication_manager.push_voice_update(voice_name))
             self.status_label.config(text=f"Stem bijgewerkt naar {voice_name}")
         except Exception as e:
             self.error_label.config(text=f"Fout bij bijwerken stem: {e}")
@@ -993,26 +984,10 @@ class VoiceUI:
 
     def _pull_current_mode(self):
         self._clear_messages()
-        url = f"{SERVER_BASE_URL}/mode"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "trigger",
-            "trigger_type": "get_current_mode",
-            "action_type": None,
-            "payload": None}
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            result = response.json()
-            current_mode = result.get("mode", "")
-            if current_mode:
-                self.modus_var.set(current_mode)
-                self.status_label.config(text=f"Huidige modus: '{current_mode}'")
-            else:
-                self.error_label.config(text="Geen modus ontvangen van server.")
+            current_mode = asyncio.run(self.communication_manager.get_current_mode_async())
+            self.modus_var.set(current_mode)
+            self.status_label.config(text=f"Huidige modus: '{current_mode}'")
         except Exception as e:
             self.error_label.config(text=f"Fout bij ophalen huidige modus: {e}")
 
@@ -2254,8 +2229,3 @@ class VoiceUI:
              print(f"Error handling success response: {e}")
              self.error_label.config(text="Error processing server response.")
 
-
-# if __name__ == "__main__":
-#     root = tk.Tk()
-#     app = VoiceUI(root, voices)
-#     root.mainloop()
