@@ -46,6 +46,8 @@ from threading import Lock
 from typing import Optional, Literal, List, Dict, Any
 from enum import Enum
 from voice_ui import VoiceUI
+from open_stream import open_audio_output_stream
+from play_segment import play_audio_segment
 
 dotenv.load_dotenv()
 
@@ -1551,12 +1553,47 @@ async def tts_request(sentence, order):
         # if order in segment_ready_events:
         #     segment_ready_events[order].set()
 
+# async def manage_audio_playback() -> None:
+#     global audio_order
+
+#     await audio_ready_event.wait()
+#     audio_ready_event.clear()
+
+#     # Open once
+#     playback_device = open_audio_output_stream()
+
+#     while True:
+#         while audio_segments.get(audio_order) is not None:
+#             segment = audio_segments[audio_order]
+
+#             if segment == "MIDI_COMMAND":
+#                 await process_midi_command(midi_commands[audio_order])
+
+#             elif segment == "EMPTYLINE":
+#                 print(f"\r{numbered_sentences[audio_order]}")
+
+#             else:  # regular MP3 bytes
+#                 if audio_order == 0:
+#                     print("\r" + " " * len(">>>>>>  Receiving...  <<<<<<<"),
+#                           end="\r")
+#                 else:
+#                     sentence = numbered_sentences[audio_order]
+#                     nospace = sentence[1:] if sentence.startswith(" ") else sentence
+#                     nonewline = nospace[1:] if nospace.startswith("\n") else nospace
+                    
+#                     print (nonewline)
+                    
+#                 await asyncio.to_thread(play, segment)
+            
+#             audio_order += 1
+
+#         await asyncio.sleep(0.05)
+
+
 async def manage_audio_playback():
     global audio_order
     await audio_ready_event.wait()
     audio_ready_event.clear()
-    # await segment_ready_events[0].wait()
-    # segment_ready_events[0].clear()
     
     while True:
         while audio_segments.get(audio_order) is not None:
@@ -1584,7 +1621,7 @@ async def manage_audio_playback():
             
             audio_order += 1
 
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.8)
 
 async def process_midi_as_audio(midi_command, order):
     # Create a special marker in audio_segments to maintain ordering
@@ -1996,13 +2033,7 @@ async def process_structured_output(function_name, function_args):
                         sentences = split_into_sentences(n8n_response)
             
                         for sentence_order, sentence in enumerate(sentences):
-                            # content = sentence.strip()
-                            # numbered_sentences[sentence_order] = sentence
-                            # if content == "" or not any(char.isalnum() for char in content):
-                            #     asyncio.create_task(process_empty_sentence(sentence_order))
-                            # else:
-                            #     clean_sentence = sentence.replace("- ", "").replace("#", "").replace("*", "").strip()
-                            #     asyncio.create_task(tts_request(clean_sentence, sentence_order))
+
                             numbered_sentences[sentence_order] = sentence
                             clean_sentence = sentence.replace("- ", "").replace("#", "").replace("*", "'").strip()
                             if not any(char.isalnum() for char in sentence):
