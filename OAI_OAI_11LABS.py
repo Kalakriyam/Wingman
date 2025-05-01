@@ -2608,7 +2608,7 @@ class PromptManager:
                     "system_prompt": row[0],
                     "dynamic_context": row[1],
                     "voice": row[2]
-    }
+                }
             return {"system_prompt": "", "dynamic_context": "", "voice": None}
         
     async def delete_prompt(self, prompt_name: str):

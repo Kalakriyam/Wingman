@@ -4,15 +4,27 @@ import tkinter.messagebox as messagebox
 import tkinter.font as tkfont # Import font module
 import tkinter.simpledialog as simpledialog
 import requests
+import orjson
 import json
 import asyncio
 import copy # Needed for deep copy
 import re
+from sqlite3 import connect
 from datetime import datetime, timedelta
+from pydantic import BaseModel
+from typing import Optional
 # from OAI_OAI_11LABS import update_voice_id, generate_model_audio_segments
 
-# --- Data ---
+# --- Classes ---
+class MessageList(BaseModel):
+    id: str
+    messages: list[dict[str, str]]
 
+class PromptProfile(BaseModel):       
+    name: str
+    system_prompt: str
+    dynamic_context: str
+    voice: Optional[str] = None
 
 # --- Configuration ---
 SERVER_BASE_URL = "http://127.0.0.1:5001"
@@ -37,6 +49,14 @@ ACTION_PUSH_CONVERSATION = "push_conversation" # New
 class VoiceUI:
     def __init__(self, root, communication_manager, prompt_manager, event_manager, settings_manager):
         self.root = root
+        self.root.title("Voice UI")
+
+        # Schermresolutie ophalen
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+
+        # Geometrie instellen: linkerhelft van het scherm    
+        self.root.geometry(f"{screen_width // 2}x{screen_height}+0+0")
         self.communication_manager = communication_manager
         self.prompt_manager = prompt_manager
         self.event_manager = event_manager
@@ -76,7 +96,6 @@ class VoiceUI:
             "voice": "Frank"}
             }
 
-        self.root.title("Voice UI")
         self.style = ttk.Style()
         self.style.theme_use("clam") # Or another theme like 'vista', 'xpnative' if preferred
 
@@ -172,13 +191,13 @@ class VoiceUI:
 
         self.modus_dropdown.pack(side=tk.LEFT, padx=(0, 5))        
 
-        self.switch_modus_button = ttk.Button(self.modus_frame, text="Wissel Modus", command=self._switch_modus)
+        self.switch_modus_button = ttk.Button(self.modus_frame, text="Switch Mode", command=self._switch_modus)
         self.switch_modus_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.pull_modus_button = ttk.Button(self.modus_frame, text="Pull Current Mode", command=self._pull_current_mode)
+        self.pull_modus_button = ttk.Button(self.modus_frame, text="Pull Curr. Mode", command=self._pull_current_mode)
         self.pull_modus_button.pack(side=tk.LEFT, padx=(5, 0))
 
-        self.add_modus_button = ttk.Button(self.modus_frame, text="Voeg Modus Toe", command=self._add_modus)      
+        self.add_modus_button = ttk.Button(self.modus_frame, text="Add Mode", command=self._add_modus)      
         self.add_modus_button.pack(side=tk.LEFT, padx=(5, 0))
 
         self._refresh_available_modes()
@@ -489,32 +508,25 @@ class VoiceUI:
             self.browse_window = None
 
 
-    # --- Event ophalen en tonen ---
+        # --- Event ophalen en tonen ---
     def load_events(self):
+        """Load events directly from the EventManager."""
         print("load_events aangeroepen")
 
         # Haal de specifieke conversation ID op
         try:
-            url = "http://127.0.0.1:5001/events"
-            headers = {"Content-Type": "application/json"}
-            data = {
-                "trigger_type": "get_specific_state",
-                "action_type": None,
-                "payload": None
-        }
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            result = response.json()
-            self.specific_conversation_id = result.get("event_id")
+            self.specific_conversation_id = self.event_manager.get_setting("specific_conversation_id")        
         except Exception as e:
             print(f"Kon specifieke conversatie niet ophalen: {e}")
             self.specific_conversation_id = None
-        self.event_id_map = {}  # display_id → full_id
+
+        self.event_id_map = {}  # display_id → full_id   
+
         # Haal gekozen event_type op
         event_type_label = self.event_type_var.get()
         event_type = next(val for label, val in self.event_type_options if label == event_type_label)
 
-        # Bepaal de datums op basis van de periode-dropdown    
+        # Bepaal de datums op basis van de periode-dropdown
         period = self.period_var.get()
         today = datetime.today().date()
 
@@ -529,74 +541,65 @@ class VoiceUI:
         else:
             dates = [today.strftime("%Y-%m-%d")]  # fallback
 
-        url = "http://127.0.0.1:5001/events"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "action_type": "list_events",
-            "payload": {
-                "event_type": event_type,
-                "dates": dates
-    }
-    }
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            event_ids = response.json()
+            # Directe aanroep van de EventManager
+            if len(dates) == 1:
+                event_ids = self.event_manager.list_event_ids_by_date(dates[0], event_type)
+            elif len(dates) == 2:
+                event_ids = self.event_manager.list_event_ids_by_range(dates[0], dates[1], event_type)        
+            else:
+                event_ids = []
         except Exception as e:
             print(f"Fout bij ophalen events: {e}")
             event_ids = []
+
+        # Update de UI met de opgehaalde events
         self.event_id_listbox.delete(0, tk.END)
         for event_id in event_ids:
             match = re.search(r"\d{4}", event_id)
             display_id = event_id[match.start():] if match else event_id
 
-            if event_id == self.specific_conversation_id:    
+            if event_id == self.specific_conversation_id:
+
                 display_id += " ★"
 
-            self.event_id_map[display_id] = event_id
+            self.event_id_map[display_id] = event_id     
             self.event_id_listbox.insert(tk.END, display_id)
+
+        # Reset de details en summary velden
         self.event_details_text.delete("1.0", tk.END)
         self.summary_text.config(state=tk.NORMAL)
         self.summary_text.delete("1.0", tk.END)
         self.summary_text.config(state=tk.DISABLED)
 
-    def show_specific_conversation_state(self, event_id: str):      
-        print("show_specific_conversation_state aangeroepen")       
-
-        event_type = "ConversationState"  # We weten dat dit het type is
-
-        url = "http://127.0.0.1:5001/events"
-        headers = {"Content-Type": "application/json"}
-
-        # Stap 1: haal het event-object op
-        data = {
-            "action_type": "get_event",
-            "payload": {"event_id": event_id}
-    }
+    def show_specific_conversation_state(self, event_id: str):
+        """Toon een specifieke ConversationState direct via de EventManager."""
+        print("show_specific_conversation_state aangeroepen")
 
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            event_obj = response.json()
+            # Haal het event-object direct op via de EventManager
+            result = self.event_manager.get_event_by_id(event_id)
+            if not result:
+                self.error_label.config(text=f"Event met ID '{event_id}' niet gevonden.")
+                return
 
-            # Toon summary als die er is
-            summary = event_obj.get("summary", "")
+            event_type, event_obj = result
+            if event_type != "ConversationState":
+                self.error_label.config(text=f"Event met ID '{event_id}' is geen ConversationState.")
+                return
+
+            # Toon de summary als die er is
+            summary = event_obj.summary
             self.summary_text.config(state=tk.NORMAL)
             self.summary_text.delete("1.0", tk.END)
             self.summary_text.insert("1.0", summary)
             self._adjust_summary_height(summary)
             self.summary_text.config(state=tk.NORMAL)
 
-            # Stap 2: haal messages op via get_list
-            list_id = event_obj.get("messages_list_file")
+            # Haal de messages op via de EventManager    
+            list_id = event_obj.messages_list_file
             if list_id:
-                list_data = {
-                    "action_type": "get_list",
-                    "payload": {"list_id": list_id}
-    }
-                list_response = requests.post(url, headers=headers, data=json.dumps(list_data), timeout=5)
-                list_response.raise_for_status()
-                messages = list_response.json()
+                messages = self.event_manager.load_list(list_id)
                 formatted = self._format_messages_for_display(messages)
             else:
                 formatted = "(Geen messages_list_file gevonden in ConversationState)"
@@ -604,67 +607,60 @@ class VoiceUI:
         except Exception as e:
             formatted = f"Fout bij ophalen details: {e}"
 
+        # Update de event details in de UI
+        self.event_details_text.config(state=tk.NORMAL)
         self.event_details_text.delete("1.0", tk.END)
         self.event_details_text.insert("1.0", formatted)
+        self.event_details_text.config(state=tk.DISABLED)
         self.event_details_text.see(tk.END)
 
     def show_event_details(self, event):
+        """Toon de details van een geselecteerd event rechtstreeks via de EventManager."""
         print("show_event_details aangeroepen")
         selection = self.event_id_listbox.curselection()
         if not selection:
             return
+
         display_id = self.event_id_listbox.get(selection[0])
         event_id = self.event_id_map.get(display_id, display_id)
         event_type_label = self.event_type_var.get()
         event_type = next(val for label, val in self.event_type_options if label == event_type_label)
 
-        url = "http://127.0.0.1:5001/events"
-        headers = {"Content-Type": "application/json"}
-
-        # Stap 1: haal het event-object op
-        data = {
-            "action_type": "get_event",
-            "payload": {
-                "event_id": event_id
-    }
-    }
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            event_obj = response.json()
+            # Haal het event-object rechtstreeks op via de EventManager
+            result = self.event_manager.get_event_by_id(event_id)
+            if not result:
+                self.error_label.config(text=f"Event '{event_id}' niet gevonden.")
+                return
+
+            event_type, event_obj = result
             self.original_event_data = event_obj
             self.current_event_id = event_id
 
-            # Toon summary als die er is
-            summary = event_obj.get("summary", "")
+            # Toon de summary als die er is
+            summary = event_obj.summary if hasattr(event_obj, "summary") else ""
             self.summary_text.config(state=tk.NORMAL)
             self.summary_text.delete("1.0", tk.END)
             self.summary_text.insert("1.0", summary)
             self._adjust_summary_height(summary)
             self.summary_text.config(state=tk.NORMAL)
 
-            # Stap 2: als ConversationState, haal messages op via get_list
+            # Als het een ConversationState is, haal de messages op
             if event_type == "ConversationState":
-                list_id = event_obj.get("messages_list_file")
+                list_id = event_obj.messages_list_file
                 if list_id:
-                    list_data = {
-                        "action_type": "get_list",
-                        "payload": {"list_id": list_id}
-    }
-                    list_response = requests.post(url, headers=headers, data=json.dumps(list_data), timeout=5)
-                    list_response.raise_for_status()
-                    messages = list_response.json()
+                    messages = self.event_manager.load_list(list_id)
                     formatted = self._format_messages_for_display(messages)
                 else:
                     formatted = "(Geen messages_list_file gevonden in ConversationState)"
             else:
-                formatted = json.dumps(event_obj, indent=2, ensure_ascii=False)
+                formatted = json.dumps(event_obj.model_dump(), indent=2, ensure_ascii=False)
 
         except Exception as e:
             formatted = f"Fout bij ophalen details: {e}"
 
-        self.event_details_text.config(state=tk.NORMAL)  # <<< toevoegen
+        # Update de UI met de opgehaalde details
+        self.event_details_text.config(state=tk.NORMAL)
         self.event_details_text.delete("1.0", tk.END)
         self.event_details_text.insert("1.0", formatted)
         self.event_details_text.config(state=tk.DISABLED)
@@ -673,7 +669,9 @@ class VoiceUI:
         # Activeer de Set Specific-knop als er een geldige selectie is
         self.set_specific_button.config(state=tk.NORMAL)
 
+
     def _set_specific_state(self):
+        """Set a specific conversation state directly via EventManager."""
         selection = self.event_id_listbox.curselection()
         if not selection:
             self.status_label.config(text="Geen event geselecteerd.")
@@ -685,27 +683,14 @@ class VoiceUI:
             self.error_label.config(text="Kon volledige event ID niet vinden.")
             return
 
-        url = "http://127.0.0.1:5001/events"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "action_type": "set_specific_state",
-            "payload": {"event_id": full_event_id}
-        }
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("status") == "ok":
-                self.status_label.config(text=result.get("message", "Specifieke conversatie ingesteld."))
-                self.load_events()
-                self.show_specific_conversation_state(full_event_id)
-            
-            else:
-                self.error_label.config(text="Server gaf geen bevestiging terug.")
+            # Directe aanroep van de EventManager
+            self.event_manager.set_setting("specific_conversation_id", full_event_id)
+            self.status_label.config(text=f"Specifieke conversatie ingesteld op {full_event_id}")
+            self.load_events()
+            self.show_specific_conversation_state(full_event_id)
         except Exception as e:
             self.error_label.config(text=f"Fout bij instellen specifieke state: {e}")
-
     def _adjust_summary_height(self, text: str):
         lines = text.count("\n") + 1
         lines = min(max(lines, 3), 5)  # minimaal 3, maximaal 5
@@ -713,6 +698,7 @@ class VoiceUI:
 
 
     def _delete_event(self):
+        """Delete an event directly via EventManager."""
         selection = self.event_id_listbox.curselection()
         if not selection:
             messagebox.showwarning("Geen selectie", "Selecteer eerst een event om te verwijderen.")
@@ -721,31 +707,25 @@ class VoiceUI:
         display_id = self.event_id_listbox.get(selection[0])
         event_id = self.event_id_map.get(display_id, display_id)
 
-        # confirm = messagebox.askyesno("Bevestig verwijderen", f"Weet je zeker dat je '{event_id}' wilt verwijderen?", parent=self.browse_window)
         response = messagebox.askyesnocancel("Bevestig verwijderen", f"Weet je zeker dat je '{event_id}' wilt verwijderen?", parent=self.browse_window)
 
         if response is None or response is False:  
             return
-                
-        url = "http://127.0.0.1:5001/events"   
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "action_type": "delete_event",
-            "payload": {"event_id": event_id}
-    }
 
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            if self.browse_status_label:
-                self.browse_status_label.config(text=f"Event '{event_id}' is verwijderd.") 
-            self.load_events()  # Refresh lijst
-            self.event_details_text.config(state=tk.NORMAL)
-            self.event_details_text.delete("1.0", tk.END)
-            self.event_details_text.config(state=tk.DISABLED)
+            # Directe aanroep van de EventManager
+            success = self.event_manager.delete_event(event_id)
+            if success:
+                if self.browse_status_label:
+                    self.browse_status_label.config(text=f"Event '{event_id}' is verwijderd.") 
+                self.load_events()  # Refresh lijst
+                self.event_details_text.config(state=tk.NORMAL)
+                self.event_details_text.delete("1.0", tk.END)
+                self.event_details_text.config(state=tk.DISABLED)
+            else:
+                messagebox.showerror("Fout", f"Event '{event_id}' kon niet worden verwijderd.", parent=self.browse_window)
         except Exception as e:
             messagebox.showerror("Fout", f"Verwijderen mislukt: {e}", parent=self.browse_window)
-
             
     def _format_messages_for_display(self, messages: list[dict[str, str]]) -> str:
         output = []
@@ -785,31 +765,24 @@ class VoiceUI:
 
              
     def _refresh_available_modes(self):
-        url = f"{SERVER_BASE_URL}/mode"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "trigger",
-            "trigger_type": "list_modes",
-            "action_type": None,
-            "payload": None
-    }
-
+        """Refresh the list of available modes directly from the PromptManager."""
+        self._clear_messages()
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            modes = response.json()
-            if isinstance(modes, list):
-                self.modus_dropdown['values'] = modes
-                if self.modus_var.get() not in modes:
-                    self.modus_var.set(modes[0] if modes else "")
-                with open(MODES_CACHE_PATH, "w", encoding="utf-8") as f:
-                    json.dump(modes, f)
-                return
+            # Directe aanroep van de asynchrone PromptManager methode
+            modes = asyncio.run(self.prompt_manager.list_prompt_names())
+
+            # Update de dropdowns
+            self.modus_dropdown['values'] = modes
+            if self.modus_var.get() not in modes:
+                self.modus_var.set(modes[0] if modes else "")
+            with open(MODES_CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(modes, f)
+
+            self.status_label.config(text="Modi succesvol vernieuwd.")
         except Exception as e:
-            print(f"Fout bij ophalen modi van server: {e}")
+            self.error_label.config(text=f"Fout bij vernieuwen modi: {e}")
             try:
+                # Fallback: laad modi uit de lokale cache
                 with open(MODES_CACHE_PATH, "r", encoding="utf-8") as f:
                     modes = json.load(f)
                 self.modus_dropdown['values'] = modes
@@ -833,37 +806,25 @@ class VoiceUI:
             self.push_prompts_button.config(state=tk.DISABLED)
             
     def reload_prompts(self):
+        """Reload prompts directly via the PromptManager."""
         self._clear_messages()
-        url = f"{SERVER_BASE_URL}{RELOAD_PROMPTS_ENDPOINT}"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "profile_name": "default"
-        }
-
         try:
-            # Disable button
+            # Disable de knop tijdens het laden
             self.refresh_modus_button.config(state=tk.DISABLED)
-            # self.root.update_idletasks()
 
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            try:
-                response_data = response.json()
-                self.status_label.config(text=response_data.get('message', 'Prompts reloaded (No message)'))
-                print(f"Successfully reloaded prompts, Response: {response_data}")
-            except json.JSONDecodeError:
-                self.status_label.config(text="Prompts reloaded successfully (non-JSON response)")
-                print(f"Successfully reloaded prompts. Status: {response.status_code}, Response: {response.text}")
+            # Directe aanroep van de PromptManager       
+            self.prompt_manager.load_default_prompts_sync(self.current_prompt_profile)
 
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Prompt reload request timed out.")
-            print(f"Error: Timeout requesting prompt reload from {url}")
-        except requests.exceptions.RequestException as e:
-            print(f"Error sending prompt reload request: {e}")
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Prompt Reload Error: {error_details}")
+            # Update de status
+            self.status_label.config(text="Prompts reloaded successfully.")
+            print(f"Prompts reloaded for profile '{self.current_prompt_profile}'.")
+
+        except Exception as e:
+            self.error_label.config(text=f"Error reloading prompts: {e}")
+            print(f"Error reloading prompts directly: {e}")
+
         finally:
-            # Re-enable button
+            # Re-enable de knop
             self.refresh_modus_button.config(state=tk.NORMAL)
 
     def edit_prompt_profile(self, profile_name="default"):
@@ -992,6 +953,7 @@ class VoiceUI:
             self.error_label.config(text=f"Fout bij ophalen huidige modus: {e}")
 
     def _save_prompt_as(self):
+        """Save the current prompt profile under a new name directly via the PromptManager."""
         # Vraag om een nieuwe naam
         new_name = simpledialog.askstring("Save Prompt As", "Nieuwe profielnaam:", parent=self.prompts_window)
         if not new_name:
@@ -1002,26 +964,17 @@ class VoiceUI:
         dynamic_content = self.dynamic_text_widget.get("1.0", tk.END).strip()
         voice = self.prompts[self.current_prompt_profile].get("voice")
 
-        # Bouw de data voor de POST
-        url = f"{SERVER_BASE_URL}/prompts"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": "push_prompts",
-            "payload": {
-                "name": new_name,
-                "system_prompt": system_content,
-                "dynamic_context": dynamic_content,
-                "voice": voice}}
+        # Bouw het nieuwe PromptProfile object
+        new_profile = PromptProfile(
+            name=new_name,
+            system_prompt=system_content,
+            dynamic_context=dynamic_content,
+            voice=voice
+    )
 
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            self.status_label.config(text=f"Huidig prompt-profiel: '{self.current_prompt_profile}'")
-            print(f"Prompt-profiel '{new_name}' succesvol opgeslagen.")
+            # Directe aanroep van de asynchrone PromptManager methode
+            asyncio.run(self.prompt_manager.save_prompt_profile(new_profile))
 
             # Voeg het nieuwe profiel toe aan de dropdown (optioneel, maar handig)
             if new_name not in self.prompts:
@@ -1030,91 +983,66 @@ class VoiceUI:
                     "original": {"system": system_content, "dynamic": dynamic_content},
                     "current": {"system": system_content, "dynamic": dynamic_content},
                     "modified": False,
-                    "voice": voice}
+                    "voice": voice
+    }
                 self.prompt_profile_dropdown['values'] = list(self.prompts.keys())
                 self.prompt_profile_var.set(new_name)
                 self.current_prompt_profile = new_name
                 self._update_prompts_status_label()
 
+            self.status_label.config(text=f"Prompt-profiel '{new_name}' succesvol opgeslagen.")
+            print(f"Prompt-profiel '{new_name}' succesvol opgeslagen.")
         except Exception as e:
             self.error_label.config(text=f"Fout bij opslaan: {e}")
+            print(f"Fout bij opslaan van prompt-profiel '{new_name}': {e}")
 
     def _delete_prompt_profile(self):
+        """Delete a prompt profile directly via PromptManager."""
         profile_name = self.current_prompt_profile
         if not profile_name:
             return
-        confirm = messagebox.askyesno("Bevestig verwijderen", f"Weet je zeker dat je '{profile_name}' wilt verwijderen?", parent=self.prompts_window)
+
+        # Bevestiging vragen aan de gebruiker
+        confirm = messagebox.askyesno(
+            "Bevestig verwijderen",
+            f"Weet je zeker dat je '{profile_name}' wilt verwijderen?",
+            parent=self.prompts_window
+        )
+        
         if not confirm:
             return
 
-        url = f"{SERVER_BASE_URL}/prompts"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": "delete_prompt",
-            "payload": {"name": profile_name}}
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
+            # Directe aanroep van de PromptManager
+            self.prompt_manager.delete_prompt(profile_name)
             self.status_label.config(text=f"Prompt-profiel '{profile_name}' verwijderd.")
-            # Refresh dropdown
+
+            # Refresh de dropdowns en UI
             self._refresh_prompt_profiles()
         except Exception as e:
             self.error_label.config(text=f"Fout bij verwijderen: {e}")
 
     def _refresh_prompt_profiles(self):
-        url = f"{SERVER_BASE_URL}/prompts"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "trigger",
-            "trigger_type": "list_prompts",
-            "action_type": None,
-            "payload": None
-    }
-
+        """Refresh the list of prompt profiles directly from the PromptManager."""
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            profiles = response.json()
-            if isinstance(profiles, list):
-                self.prompt_profile_dropdown['values'] = profiles
-                self.modus_dropdown['values'] = profiles  # ✅ update modus-dropdown ook  
+            # Gebruik asyncio.run om de asynchrone methode aan te roepen
+            profiles = asyncio.run(self.prompt_manager.list_prompt_names())
 
-                if self.current_prompt_profile not in profiles:
-                    self.prompt_profile_var.set(profiles[0] if profiles else "")
-                    self.current_prompt_profile = self.prompt_profile_var.get()
+            # Update de dropdowns
+            self.prompt_profile_dropdown['values'] = profiles
+            self.modus_dropdown['values'] = profiles  #  ✅ update modus-dropdown ook
 
-                if self.modus_var.get() not in profiles:
-                    self.modus_var.set(profiles[0] if profiles else "")
+            if self.current_prompt_profile not in profiles:
+                self.prompt_profile_var.set(profiles[0] if profiles else "")
+                self.current_prompt_profile = self.prompt_profile_var.get()
 
-                with open(PROMPT_CACHE_PATH, "w", encoding="utf-8") as f:
-                    json.dump(profiles, f)
-                return
+            if self.modus_var.get() not in profiles:     
+                self.modus_var.set(profiles[0] if profiles else "")
+
+            self.status_label.config(text="Profielen succesvol vernieuwd.")
         except Exception as e:
-            print(f"Fout bij ophalen profielen van server: {e}")
-            try:
-                with open(PROMPT_CACHE_PATH, "r", encoding="utf-8") as f:
-                    profiles = json.load(f)
-                self.prompt_profile_dropdown['values'] = profiles
-                self.modus_dropdown['values'] = profiles  # ✅ ook bij fallback
-
-                if self.current_prompt_profile not in profiles:
-                    self.prompt_profile_var.set(profiles[0] if profiles else "")
-                    self.current_prompt_profile = self.prompt_profile_var.get()
-
-                if self.modus_var.get() not in profiles:
-                    self.modus_var.set(profiles[0] if profiles else "")
-
-                self.status_label.config(text="Profielen geladen uit lokale cache.")      
-            except Exception as e2:
-                self.error_label.config(text="Geen verbinding en geen lokale profielen beschikbaar.")
-
-
+            self.error_label.config(text=f"Fout bij vernieuwen profielen: {e}")
+            
     def _update_prompts_status_label(self):
             profile = self.prompts.get(self.current_prompt_profile)
             if not profile:
@@ -1127,6 +1055,7 @@ class VoiceUI:
             self.root.update_idletasks()
 
     def _save_summary(self):
+        """Save the updated summary directly via EventManager."""
         selection = self.event_id_listbox.curselection()
         if not selection:
             messagebox.showwarning("Geen selectie", "Selecteer eerst een event om te bewaren.")
@@ -1137,25 +1066,32 @@ class VoiceUI:
 
         new_summary = self.summary_text.get("1.0", tk.END).strip()
 
-        url = "http://127.0.0.1:5001/events"   
-        headers = {"Content-Type": "application/json"}
-        save_data = {
-            "action_type": "save_summary",
-            "payload": {
-                "event_id": event_id,
-                "event_type": "ConversationState",
-                "summary": new_summary
-    }
-    }
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(save_data), timeout=5)
-            response.raise_for_status()
+            # Directe aanroep van de EventManager
+            with self.event_manager.lock, connect(self.event_manager.db_path) as conn:
+                cursor = conn.execute(
+                    "SELECT content FROM events WHERE event_id = ? AND type = ?",
+                    (event_id, "ConversationState"))
+                row = cursor.fetchone()
+                if not row:
+                    messagebox.showerror("Fout", "Event niet gevonden in de database.")
+                    return
+
+                # Update de summary in de content        
+                content = orjson.loads(row[0])
+                content['summary'] = new_summary
+                content_json = orjson.dumps(content).decode('utf-8')
+
+                # Sla de gewijzigde content op
+                conn.execute(
+                    "UPDATE events SET content = ? WHERE event_id = ? AND type = ?",
+                    (content_json, event_id, "ConversationState"))
+                conn.commit()
+
             self.browse_status_label.config(text="Summary saved.")
             self.save_summary_button.config(state=tk.DISABLED)
         except Exception as e:
-            self.browse_status_label.config(text=f"Error saving summary: {e}")
-
+            messagebox.showerror("Fout", f"Opslaan mislukt: {e}")
 
     def _on_prompt_modified(self, event=None):
         """Zet modified-flag alleen als er echt iets gewijzigd is door de gebruiker."""
@@ -1238,51 +1174,36 @@ class VoiceUI:
         self._update_prompts_status_label()
 
     def _push_and_close_prompt(self):
-        """Stuurt het huidige prompt-profiel naar de server en sluit het venster bij succes."""
+        """Sends the current prompt profile to the PromptManager and closes the window upon success."""       
         if not self._keep_prompt_changes():
-            return  # Als bewaren mislukt, niet pushen
+            return  # Als het bewaren van wijzigingen mislukt, niet verdergaan.
 
         profile = self.prompts[self.current_prompt_profile]
 
-        url = f"{SERVER_BASE_URL}/prompts"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": "push_prompts",
-            "payload": {
-                "name": profile["name"],
-                "system_prompt": profile["current"]["system"],
-                "dynamic_context": profile["current"]["dynamic"],
-                "voice": profile.get("voice")
-            }
-        }
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            response_data = response.json()
+            # Directe aanroep van de asynchrone PromptManager methode
+            asyncio.run(self.prompt_manager.save_prompt_profile(PromptProfile(
+                name=profile["name"],
+                system_prompt=profile["current"]["system"],
+                dynamic_context=profile["current"]["dynamic"],
+                voice=profile.get("voice"))))
 
-            self.status_label.config(text=f"Prompt-profiel '{profile['name']}' gepusht.")
-            print(f"Prompt-profiel '{profile['name']}' succesvol gepusht: {response_data}")
+            self.status_label.config(text=f"Prompt-profiel '{profile['name']}' succesvol opgeslagen.")        
+            print(f"Prompt-profiel '{profile['name']}' succesvol gepusht naar PromptManager.")
 
-            # Sluit venster na succesvolle push
-            if self.prompts_window and self.prompts_window.winfo_exists():      
+            # Sluit het venster na succesvolle push      
+            if self.prompts_window and self.prompts_window.winfo_exists():
                 self.prompts_window.destroy()
 
-            self.prompts_window = None    
+            self.prompts_window = None
             self.system_text_widget = None
             self.dynamic_text_widget = None
             self.prompts_modified_flag = False
             self._update_prompts_status_label()
 
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Push prompt-profiel timed out.")
-        except requests.exceptions.RequestException as e:
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Push prompt-profiel fout: {error_details}")
+        except Exception as e:
+            self.error_label.config(text=f"Fout bij opslaan van prompt-profiel: {e}")
+            print(f"Fout bij opslaan van prompt-profiel: {e}")
 
     def edit_prompts(self):
         self._clear_messages()
@@ -1293,32 +1214,11 @@ class VoiceUI:
         self.status_label.config(text="Push Prompts: nog niet geïmplementeerd.")
 
     def pull_prompt_profile(self, profile_name="default"):
-    
+        """Pull a prompt profile directly from the PromptManager."""
         self._clear_messages()
-        url = f"{SERVER_BASE_URL}/prompts"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "trigger",
-            "trigger_type": "pull_prompts",
-            "action_type": None,
-            "payload": {"name": profile_name}}
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            response_data = response.json()
-
-            # Verwacht: {"system_prompt": "...", "dynamic_context": "...", "voice": "George"}
-            system = response_data.get("system_prompt", "")
-            dynamic_raw = response_data.get("dynamic_context", "")
-            if isinstance(dynamic_raw, list):
-                user_msg = next((msg.get("content", "") for msg in dynamic_raw if msg.get("role") == "user"), "")     
-                dynamic = user_msg
-            else:
-                dynamic = dynamic_raw
-            voice = response_data.get("voice", None)
+            # Gebruik asyncio.run om de asynchrone functie aan te roepen
+            raw_profile = asyncio.run(self.prompt_manager.get_raw_prompt_profile(profile_name))
 
             if profile_name not in self.prompts:
                 self.prompts[profile_name] = {
@@ -1326,36 +1226,31 @@ class VoiceUI:
                     "original": {"system": "", "dynamic": ""},
                     "current": {"system": "", "dynamic": ""},
                     "modified": False,
-                    "voice": voice}
+                    "voice": raw_profile.get("voice")}
 
-            self.prompts[profile_name]["original"]["system"] = system
-            self.prompts[profile_name]["original"]["dynamic"] = dynamic
-            self.prompts[profile_name]["current"]["system"] = system
-            self.prompts[profile_name]["current"]["dynamic"] = dynamic
+            self.prompts[profile_name]["original"]["system"] = raw_profile.get("system_prompt", "")
+            self.prompts[profile_name]["original"]["dynamic"] = raw_profile.get("dynamic_context", "")
+            self.prompts[profile_name]["current"]["system"] = raw_profile.get("system_prompt", "")
+            self.prompts[profile_name]["current"]["dynamic"] = raw_profile.get("dynamic_context", "")
             self.prompts[profile_name]["modified"] = False
-            self.prompts[profile_name]["voice"] = voice
+
+            self.edit_prompts_button.config(state=tk.NORMAL)
+            self.push_prompts_button.config(state=tk.NORMAL)
 
             self.status_label.config(text=f"Prompt-profiel '{profile_name}' opgehaald.")
-            if self.is_prompt_loaded(profile_name):
-                self.edit_prompts_button.config(state=tk.NORMAL)
-                self.push_prompts_button.config(state=tk.NORMAL)
-            print(f"Profiel '{profile_name}' geladen: voice={voice}")
             self._update_prompts_status_label()
-
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Prompt-profiel ophalen timed out.")
-        except requests.exceptions.RequestException as e:
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Prompt-profiel fout: {error_details}")
+        except Exception as e:
+            self.error_label.config(text=f"Error pulling prompt profile: {e}")
 
     def _add_modus(self):
+        """Voegt een nieuwe modus (prompt-profiel) toe via de PromptManager."""
         self._clear_messages()
         modus_naam = simpledialog.askstring("Nieuwe Modus", "Voer de naam in voor de nieuwe modus (prompt-profiel):", parent=self.root)
         if not modus_naam:
-            self.error_label.config(text="Toevoegen geannuleerd of geen naam ingevoerd.") 
+            self.error_label.config(text="Toevoegen geannuleerd of geen naam ingevoerd.")
             return
 
-        # Gebruik huidige prompt als basis     
+        # Gebruik huidige prompt als basis
         current_profile = self.prompts.get(self.current_prompt_profile)
         if not current_profile:
             self.error_label.config(text="Huidig prompt-profiel niet gevonden.")
@@ -1365,128 +1260,62 @@ class VoiceUI:
         dynamic_context = current_profile["current"]["dynamic"]
         voice = current_profile.get("voice")
 
-        url = f"{SERVER_BASE_URL}/prompts"     
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": "push_prompts",
-            "payload": {
+        try:
+            # Directe aanroep van de PromptManager om een nieuw profiel op te slaan
+            new_profile = {
                 "name": modus_naam,
                 "system_prompt": system_prompt,
                 "dynamic_context": dynamic_context,
                 "voice": voice
-    }
-    }
+            }
+            self.prompt_manager.save_prompt_profile_sync(new_profile)
 
-        try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            self.status_label.config(text=f"Nieuwe modus '{modus_naam}' toegevoegd als prompt-profiel.")
+            # Update de UI
+            self.status_label.config(text=f"Nieuwe modus '{modus_naam}' toegevoegd als prompt-profiel.")      
             self._refresh_prompt_profiles()
+            print(f"Nieuwe modus '{modus_naam}' succesvol toegevoegd.")
+
         except Exception as e:
             self.error_label.config(text=f"Fout bij toevoegen modus: {e}")
-
-
-
+            print(f"Fout bij toevoegen modus '{modus_naam}': {e}")
 
     # --- In Summary Controls ---
-    def push_summary(self) -> bool: # Add return type hint
-        """Sends the summary text to the /message endpoint using PUSH_SUMMARY action. Returns True on success, False on failure."""
+    def push_summary(self):
+        """Sends the summary text directly to the CommunicationManager."""
         self._clear_messages()
-        # --- Get text from tk.Text widget ---
-        summary_text = self.summary_entry.get("1.0", tk.END).strip() # Get text and remove leading/trailing whitespace
+        # Haal de tekst op uit de UI
+        summary_text = self.summary_entry.get("1.0", tk.END).strip()
 
         if not summary_text:
             self.error_label.config(text="Error: Summary cannot be empty to push.")
-            return False
+            return
 
-        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": ACTION_PUSH_SUMMARY,
-            "payload": {"text": summary_text}
-        }
-        success = False # Flag for return value
         try:
-            self.push_summary_button.config(state=tk.DISABLED)
-            self.root.update_idletasks()
+            # Directe aanroep van de CommunicationManager
+            self.communication_manager.load_summary_sync(summary_text)
+            self.summary_entry.delete("1.0", tk.END)  # Leegmaken na push
+            self.status_label.config(text="Summary pushed successfully.")
+            print("Summary pushed directly to CommunicationManager.")
+        except Exception as e:
+            self.error_label.config(text=f"Error pushing summary: {e}")
+            print(f"Error pushing summary directly: {e}")
 
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-            self._handle_api_success_response(response, "Summary pushed")
-            self.summary_entry.delete("1.0", tk.END)  # 🧹 Leegmaken na push
-            success = True # Set flag on success
-
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Summary push request timed out.")
-            print(f"Error: Timeout sending summary push to {url}")
-        except requests.exceptions.RequestException as e:
-            print(f"Error sending summary push request: {e}")
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Summary Push Error: {error_details}")
-        finally:
-            self.push_summary_button.config(state=tk.NORMAL)
-            return success # Return the success flag
 
     def pull_summary(self):
-        """Fetches the current summary via the /message POST endpoint using pull_summary trigger."""
+        """Fetches the current summary directly from the CommunicationManager."""
         self._clear_messages()
-        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME, # Consistent name
-            "recipient": RECIPIENT_NAME, # Consistent name
-            "message_type": "trigger",
-            "trigger_type": ACTION_PULL_SUMMARY, # Defined constant
-            "action_type": None,
-            "payload": None
-        }
-
         try:
-            # Disable button
-            self.pull_summary_button.config(state=tk.DISABLED)
-            self.root.update_idletasks()
+            # Directe aanroep van de CommunicationManager
+            summary_text = self.communication_manager.get_summary_sync()
 
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
-
-            summary_text = ""
-            try:
-                # response.json() correctly handles JSON strings -> Python strings
-                summary_text = response.json()
-                if not isinstance(summary_text, str):
-                    print(f"Warning: Expected string from summary pull, got {type(summary_text)}. Converting.")
-                    summary_text = str(summary_text)
-
-            except json.JSONDecodeError:
-                print(f"Warning: Response from {url} for summary pull was not valid JSON. Using raw text.")
-                summary_text = response.text
-                # Optional: Try stripping quotes if it's non-JSON but looks like '"text"'
-                if len(summary_text) >= 2 and summary_text.startswith('"') and summary_text.endswith('"'):
-                    summary_text = summary_text[1:-1]
-
-            self.summary_entry.delete("1.0", tk.END) # <<< Correct index for tk.Text
+            # Update de UI met de opgehaalde summary     
+            self.summary_entry.delete("1.0", tk.END)
             self.summary_entry.insert("1.0", summary_text)
             self.status_label.config(text="Summary pulled successfully.")
-            print(f"Successfully pulled summary via POST to {url}")
-
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Summary pull request timed out.")
-            print(f"Error: Timeout while POSTing for summary to {url}")
-        except requests.exceptions.RequestException as e:
-            print(f"Error pulling summary via POST: {e}")
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Summary Pull Error: {error_details}")
-        finally:
-            # Re-enable button
-            self.pull_summary_button.config(state=tk.NORMAL)
+            print("Summary pulled directly from CommunicationManager.")
+        except Exception as e:
+            self.error_label.config(text=f"Error pulling summary: {e}")
+            print(f"Error pulling summary directly: {e}")
 
 
     # --- Message Controls (Main Window) ---
@@ -1518,111 +1347,54 @@ class VoiceUI:
         # self.root.update_idletasks() # Ensure UI updates immediately
 
     def pull_messages(self):
-        """Fetches messages, stores them, updates status, and opens/refreshes the editor.
-           Prompts if editor is open."""
+        """Fetches messages directly from the CommunicationManager."""
         self._clear_messages()
 
-        # --- Check if editor is open ---
-        # Prompt regardless of modification status if window exists
+        # Controleer of het editorvenster open is en vraag bevestiging om door te gaan
         if self.messages_window and self.messages_window.winfo_exists():
-            response = messagebox.askyesno( # Changed to askyesno
+            response = messagebox.askyesno(
                 "Confirm Pull",
-                "This will discard current editor content (if any) and pull fresh messages.\n\n"
-                "Proceed?",
+                "This will discard current editor content (if any) and pull fresh messages.\n\nProceed?",     
                 parent=self.root
             )
-
-            if response is True: # Yes - Discard/Close and Pull
-                print("Discarding editor content (if any) and proceeding with pull.")
-                # Force close the editor window
-                if self.messages_window and self.messages_window.winfo_exists():
-                    self.messages_window.destroy()
-                self.messages_window = None
-                self.messages_text_widget = None
-                self.push_close_button_ref = None
-                # Modified flag will be reset on successful pull below
-                # Allow the code below to execute...
-
-            else: # No or Closed Box
+            if not response:
                 self.status_label.config(text="Pull operation cancelled.")
-                return # Cancel the pull operation
+                return
 
-        # --- If window wasn't open OR user chose "Yes" (Discard), proceed to pull ---
-
-        # --- Network Request Logic ---
-        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "trigger",
-            "trigger_type": ACTION_PULL_CONVERSATION,
-            "action_type": None,
-            "payload": None
-        }
+            # Sluit het editorvenster als de gebruiker doorgaat
+            self.messages_window.destroy()
+            self.messages_window = None
+            self.messages_text_widget = None
 
         try:
-            # Disable button during request
-            self.pull_messages_button.config(state=tk.DISABLED)
-            self.root.update_idletasks()
+            # Directe aanroep van de CommunicationManager
+            messages = self.communication_manager.get_messages_sync()
 
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            response.raise_for_status()
+            if not isinstance(messages, list):
+                self.error_label.config(text="Error: Expected list from CommunicationManager, got different format.")
+                print(f"Unexpected response format pulling messages. Expected list, got {type(messages)}")
+                self.clear_local_messages()
+                return
 
-            # --- Process successful response ---
-            try:
-                messages = response.json()
-                if not isinstance(messages, list):
-                    self.error_label.config(text="Error: Expected list from server, got different format.")
-                    print(f"Unexpected response format pulling messages. Expected list, got {type(messages)}")
-                    self.clear_local_messages() # Reset state on bad data
-                    return # Stop processing here
+            # Sla de opgehaalde berichten op
+            self.original_messages = copy.deepcopy(messages)
+            self.current_messages = messages
+            self.messages_modified_flag = False
+            self.status_label.config(text=f"Messages pulled ({len(messages)}).")
+            print(f"Successfully pulled {len(messages)} messages.")
+            self._update_messages_status_and_buttons()
 
-                # Success - Store messages
-                self.original_messages = copy.deepcopy(messages)
-                self.current_messages = messages
-                self.messages_modified_flag = False # Reset modified flag on successful pull
-                self.status_label.config(text=f"Messages pulled ({len(messages)}).")
-                print(f"Successfully pulled {len(messages)} messages")
-                self._update_messages_status_and_buttons() # Update count and buttons
+            # Open of vernieuw het editorvenster
+            if self.messages_window and self.messages_window.winfo_exists():
+                self._reformat_messages_display()
+                self.messages_window.lift()
+                self.messages_window.focus_force()
+            else:
+                self._display_messages()
 
-                # --- Refresh or Open Editor ---
-                if self.messages_window and self.messages_window.winfo_exists():
-                    # Window exists, just update its content and bring to front
-                    self._reformat_messages_display()
-                    self.messages_window.lift()
-                    self.messages_window.focus_force()
-                    # Reset modified state just in case reformat triggered something
-                    if self.messages_text_widget:
-                         self.messages_text_widget.edit_modified(False)
-                    self.messages_modified_flag = False
-                    self._update_messages_status_and_buttons()
-                else:
-                    # Window doesn't exist, open a new one
-                    self._display_messages()
-                # --- End Editor Refresh/Open ---
-
-            except json.JSONDecodeError:
-                self.error_label.config(text="Error: Could not parse server response (messages).")
-                print(f"Error: Invalid JSON in response pulling messages from {url}")
-                self.clear_local_messages() # Reset state on bad data
-
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Messages pull request timed out.")
-            print(f"Error: Timeout while requesting messages from {url}")
-            # Don't clear local messages on timeout, might be temporary
-            self._update_messages_status_and_buttons() # Ensure button states are correct
-        except requests.exceptions.RequestException as e:
-            print(f"Error pulling messages: {e}")
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Messages Pull Error: {error_details}")
-            # Don't clear local messages on request error
-            self._update_messages_status_and_buttons() # Ensure button states are correct
-        finally:
-             # Re-enable button AFTER request finishes or fails
-             self.pull_messages_button.config(state=tk.NORMAL)
-             # Update status/buttons again in case state changed during error handling
-             self._update_messages_status_and_buttons()
+        except Exception as e:
+            self.error_label.config(text=f"Error pulling messages: {e}")
+            print(f"Error pulling messages directly: {e}")
 
 
     def edit_messages(self):
@@ -1663,82 +1435,22 @@ class VoiceUI:
         print("Local messages cleared.")
 
     def push_main_messages(self):
-        """Pushes the currently stored self.current_messages to the server.
-           Prompts to push summary if it exists."""
+        """Pushes the currently stored messages directly to the CommunicationManager."""
         self._clear_messages()
         if self.current_messages is None:
             self.error_label.config(text="Error: No messages loaded to push.")
             return
-        # Push button already handles modified flag warning (implicitly pushes kept state)
 
-        # --- Check for summary and ask initial question ---
-        summary_text = self.summary_entry.get("1.0", tk.END).strip() # <<< CORRECTED: Added arguments for tk.Text.get()
-        push_summary_flag = False
-        if summary_text:
-            push_summary_flag = messagebox.askyesno(
-                "Push Summary?",
-                "Summary field is not empty.\nPush the summary as well after pushing messages?",
-                parent=self.root # Relative to main window
-            )
-        # --- End NEW ---
-
-        url = f"{SERVER_BASE_URL}{MESSAGE_ENDPOINT}"
-        headers = {"Content-Type": "application/json"}
-        payload_data = {
-            "sender": SENDER_NAME,
-            "recipient": RECIPIENT_NAME,
-            "message_type": "action_request",
-            "trigger_type": None,
-            "action_type": ACTION_PUSH_CONVERSATION,
-            "payload": {
-                "conversation": self.current_messages # Push the kept state
-            }
-        }
-
-        message_push_success = False # Track success
         try:
-            self.push_messages_button.config(state=tk.DISABLED)
-            self.root.update_idletasks()
-
-            response = requests.post(url, headers=headers, data=json.dumps(payload_data), timeout=15)
-            response.raise_for_status()
-
-            # --- Message Push Success ---
-            message_push_success = True
-            self._handle_api_success_response(response, f"Messages ({len(self.current_messages)}) pushed")
-            # Note: Pushing main messages doesn't change modified flag itself
-
-            # --- Handle potential summary push ---
-            if push_summary_flag:
-                print("Proceeding to push summary after successful message push...")
-                self.push_summary() # Call push_summary (it handles its own status/errors)
-            # --- End NEW ---
-
-        except requests.exceptions.Timeout:
-            self.error_label.config(text="Error: Message push request timed out.")
-            print(f"Error: Timeout sending message push to {url}")
-        except requests.exceptions.RequestException as e:
-            print(f"Error sending message push request: {e}")
-            error_details = self._format_request_error(e)
-            self.error_label.config(text=f"Message Push Error: {error_details}")
-        finally:
-            # --- Handle summary push if message push FAILED ---
-            if not message_push_success and push_summary_flag:
-                 push_anyway = messagebox.askyesno(
-                     "Push Summary?",
-                     "Message push failed. Do you still want to try pushing the summary?",
-                     parent=self.root
-                 )
-                 if push_anyway:
-                     print("Attempting to push summary after message push failed...")
-                     self.push_summary()
-            # --- End NEW ---
-
-            # Re-enable button (only if messages still exist conceptually)
-            if self.current_messages is not None:
-                self.push_messages_button.config(state=tk.NORMAL)
-            self._update_messages_status_and_buttons() # Refresh status/button states
-
+            # Directe aanroep van de CommunicationManager
+            self.communication_manager.set_messages_sync(self.current_messages)
+            self.messages_modified_flag = False  # Reset de modified flag
+            self._update_messages_status_and_buttons()
+            self.status_label.config(text=f"Messages ({len(self.current_messages)}) pushed successfully.")
+            print(f"Messages ({len(self.current_messages)}) pushed directly to CommunicationManager.")
+        except Exception as e:
+            self.error_label.config(text=f"Error pushing messages: {e}")
+            print(f"Error pushing messages directly: {e}")
 
     # --- Message Editor Window and Logic ---
 
@@ -2160,31 +1872,55 @@ class VoiceUI:
             self.error_label.config(text=f"Fout bij openen event: {e}")
 
     def _save_event_details(self):
+        """Save updated event details and summary directly via EventManager."""
         if not hasattr(self, 'current_event_id') or not self.current_event_id:
-            messagebox.showwarning("No Event", "No event selected to save.", parent=self.browse_window)
+            messagebox.showwarning("No Event", "No event selected to save.", parent=self.browse_window)       
             return
 
         updated_summary = self.summary_text.get("1.0", tk.END).strip()
         updated_details = self.event_details_text.get("1.0", tk.END).strip()
 
-        url = "http://127.0.0.1:5001/events"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "action_type": "update_event",
-            "payload": {
-                "event_id": self.current_event_id,
-                "summary": updated_summary,
-                "details": updated_details
-            }
-        }
-
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
-            response.raise_for_status()
-            self.browse_status_label.config(text="Event details saved.")
+            # Haal het bestaande event op
+            result = self.event_manager.get_event_by_id(self.current_event_id)
+            if not result:
+                messagebox.showerror("Save Error", "Event not found in EventManager.", parent=self.browse_window)
+                return
+
+            event_type, event_obj = result
+            event_updated = False  # Flag om te checken of we het event moeten opslaan
+
+            # Update de summary als die bestaat
+            if hasattr(event_obj, "summary") and updated_summary is not None:
+                event_obj.summary = updated_summary
+                event_updated = True
+
+            # Update de messages_list_file als het een ConversationState is
+            if event_type == "ConversationState" and hasattr(event_obj, "messages_list_file"):
+                list_id = event_obj.messages_list_file
+                if list_id and updated_details is not None:
+                    # Parse de details terug naar messages
+                    messages = []
+                    pattern = r"--- (USER|ASSISTANT): ---\n"
+                    splits = re.split(pattern, updated_details)
+                    for i in range(1, len(splits) - 1, 2):
+                        role = splits[i].strip().lower()
+                        content = splits[i + 1].strip()
+                        messages.append({"role": role, "content": content})
+
+                    message_list = MessageList(id=list_id, messages=messages)
+                    self.event_manager.save_list(message_list)
+                    event_updated = True  # ✅ ook hier!
+
+            # Alleen opslaan als er echt iets veranderd is
+            if event_updated:
+                self.event_manager.save_event(event_type, event_obj.model_dump(), event_id=self.current_event_id)
+                self.browse_status_label.config(text="Event details saved.")
+            else:
+                self.browse_status_label.config(text="No changes detected to save.")
+
         except Exception as e:
             messagebox.showerror("Save Error", f"Failed to save event: {e}", parent=self.browse_window)
-
     def _undo_changes_to_summary(self):
         if not hasattr(self, 'original_event_data') or not self.original_event_data:
             messagebox.showwarning("No Original", "No original data to undo to.", parent=self.browse_window)
