@@ -19,6 +19,8 @@ import sqlite3
 from sqlite3 import connect
 import tkinter as tk
 import pyperclip
+import miniaudio
+import numpy as np
 # import pydantic
 # from mcp.server.fastmcp import FastMCP
 import aiosqlite
@@ -33,6 +35,7 @@ from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
 from ultimate_playback import play
+# from temp_playback import play
 from db_helpers import list_modes, add_mode, delete_mode
 from termcolor import colored
 from openai import AsyncOpenAI
@@ -60,7 +63,6 @@ async def initialize_http_session():
     
     # Configure optimized TCP connector
     connector = aiohttp.TCPConnector(
-        limit=20,              # Up to 20 concurrent connections (matches Elevenlabs limit)
         ttl_dns_cache=300,     # Cache DNS lookups for 5 minutes
         force_close=False,     # Allow connection reuse
         enable_cleanup_closed=True
@@ -69,8 +71,7 @@ async def initialize_http_session():
     # Create the session with optimized settings
     global_http_session = aiohttp.ClientSession(
         connector=connector,
-        timeout=aiohttp.ClientTimeout(total=20),
-        headers={'Accept-Encoding': 'gzip, deflate'}  # Enable compression by default
+        timeout=aiohttp.ClientTimeout(total=20)
     )
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -1424,7 +1425,6 @@ async def initialize():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     init_audio_path = os.path.join(script_dir, 'INITIALIZING.mp3')
     first_audio = AudioSegment.from_mp3(init_audio_path)
-    second_audio = AudioSegment.from_mp3(init_audio_path)
     
     # Prepare and start the TTS request for the welcome sentence
     sentence_order = 0
@@ -1468,6 +1468,82 @@ def split_into_sentences(text):
 #     except Exception as e:
 #         print(f"Error in TTS requestfor sentence {order}: {e}")
 
+# async def tts_request(sentence, order):
+#     voice_id = communication_manager.voice_id
+#     try:
+#         async with tts_semaphore:
+#             url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+#             headers = {
+#                 "xi-api-key": ELEVENLABS_API_KEY,
+#                 "Content-Type": "application/json",
+#             }
+            
+#             # Base request data
+#             data = {
+#                 "text": sentence,
+#                 "model_id": MODEL_ID
+#             }
+
+#             # More efficient collection of previous context
+#             previous_sentences = []
+#             for i in range(1, 5):  # Check up to 4 sentences
+#                 if order >= i:
+#                     prev_sentence = numbered_sentences.get(order - i)
+#                     if prev_sentence is not None and audio_segments.get(order - i) != "EMPTYLINE":
+#                         previous_sentences.append(prev_sentence)
+#                         if len(previous_sentences) == 2:  # Two 'non-None' sentences are enough
+#                             break
+
+#             if previous_sentences:
+#                 data["previous_text"] = " ".join(previous_sentences[::-1])  # Reverse to maintain original order
+
+#             # More efficient collection of next context
+#             next_sentences = []
+#             for i in range(1, 5):  # Check up to 4 sentences
+#                 next_sentence = numbered_sentences.get(order + i)
+#                 if next_sentence is not None and audio_segments.get(order + i) != "EMPTYLINE":
+#                     next_sentences.append(next_sentence)
+#                     if len(next_sentences) == 2:
+#                         break
+
+#             if next_sentences:
+#                 data["next_text"] = " ".join(next_sentences)
+
+#             # Encode data using orjson and pass as bytes to 'data' parameter
+#             json_payload = orjson.dumps(data)
+            
+#             # Use the global session with performance optimizations
+#             async with global_http_session.post(
+#                 url,
+#                 headers=headers,
+#                 data=json_payload,
+#                 timeout=30
+#             ) as response:
+#                 if response.status != 200:
+#                     error_text = await response.text()
+#                     print(f"ElevenLabs API error: Status {response.status}, Response: {error_text}")
+#                     raise Exception(f"ElevenLabs API returned status {response.status}")
+
+#                 # ★ grab the whole MP3 at once
+#                 audio_data: bytes = await response.read()
+
+#                 # same non-blocking decode
+#                 audio = await asyncio.to_thread(AudioSegment.from_file,
+#                                                 io.BytesIO(audio_data),
+#                                                 format="mp3")
+
+#                 # optional trim & fade
+#                 if DEFAULT_TRIM_MS > 0 and len(audio) > DEFAULT_TRIM_MS:
+#                     audio = audio[:-DEFAULT_TRIM_MS].fade_out(DEFAULT_FADE_MS)
+
+#                 audio_segments[order] = audio          # done
+#                 if order == 0:
+#                     audio_ready_event.set()
+                   
+#     except Exception as e:
+#         print(f"TTS API error for sentence {order} ({sentence}): {e}")
+
+
 async def tts_request(sentence, order):
     voice_id = communication_manager.voice_id
     try:
@@ -1476,7 +1552,6 @@ async def tts_request(sentence, order):
             headers = {
                 "xi-api-key": ELEVENLABS_API_KEY,
                 "Content-Type": "application/json",
-                "Accept-Encoding": "gzip"  # Enable compression for faster transfers
             }
             
             # Base request data
@@ -1515,43 +1590,35 @@ async def tts_request(sentence, order):
             
             # Use the global session with performance optimizations
             async with global_http_session.post(
-                url, 
-                headers=headers, 
+                url,
+                headers=headers,
                 data=json_payload,
-                timeout=15  # Add explicit timeout to prevent hanging requests
+                timeout=30
             ) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     print(f"ElevenLabs API error: Status {response.status}, Response: {error_text}")
                     raise Exception(f"ElevenLabs API returned status {response.status}")
 
-                # More efficient audio data collection with larger chunks
-                audio_data = b''
-                async for chunk in response.content.iter_chunked(8192):  # Larger chunks for better performance
-                    if chunk:
-                        audio_data += chunk
+                # ★ grab the whole MP3 at once
+                audio_data: bytes = await response.read()
 
-                # Process audio in a non-blocking way
-                audio = await asyncio.to_thread(AudioSegment.from_file, io.BytesIO(audio_data), format="mp3")
+                # same non-blocking decode
+                audio = await asyncio.to_thread(AudioSegment.from_file,
+                                                io.BytesIO(audio_data),
+                                                format="mp3")
 
-                # Delete the last DEFAULT_FADE_MS milliseconds and add fade-out
+                # optional trim & fade
                 if DEFAULT_TRIM_MS > 0 and len(audio) > DEFAULT_TRIM_MS:
-                    trimmed_audio = audio[:-DEFAULT_TRIM_MS]
-                    audio = trimmed_audio.fade_out(DEFAULT_FADE_MS)
-                
-                audio_segments[order] = audio
-                
-                # Set events to signal completion
+                    audio = audio[:-DEFAULT_TRIM_MS].fade_out(DEFAULT_FADE_MS)
+
+                audio_segments[order] = audio          # done
                 if order == 0:
                     audio_ready_event.set()
-                    segment_ready_events[order] = asyncio.Event()
-                    segment_ready_events[order].set()
-                    
+                   
     except Exception as e:
         print(f"TTS API error for sentence {order} ({sentence}): {e}")
-        # Make sure we don't block the audio playback queue by setting the event even on error
-        # if order in segment_ready_events:
-        #     segment_ready_events[order].set()
+
 
 # async def manage_audio_playback() -> None:
 #     global audio_order
@@ -1621,7 +1688,7 @@ async def manage_audio_playback():
             
             audio_order += 1
 
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.05)
 
 async def process_midi_as_audio(midi_command, order):
     # Create a special marker in audio_segments to maintain ordering
