@@ -51,12 +51,16 @@ class VoiceUI:
         self.root = root
         self.root.title("Voice UI")
 
-        # Schermresolutie ophalen
+        # Hoofdscherm geometrie instellen
+        self.root.update_idletasks()
+        border_width = self.root.winfo_rootx() - self.root.winfo_x()
+        titlebar_height = self.root.winfo_rooty() - self.root.winfo_y()
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-
-        # Geometrie instellen: linkerhelft van het scherm    
-        self.root.geometry(f"{screen_width // 2}x{screen_height}+0+0")
+        window_width = screen_width // 2 - border_width * 2
+        window_height = screen_height - titlebar_height - border_width
+        self.root.geometry(f"{window_width}x{window_height}+0+0")
+        
         self.communication_manager = communication_manager
         self.prompt_manager = prompt_manager
         self.event_manager = event_manager
@@ -370,13 +374,15 @@ class VoiceUI:
             self.error_label.config(text=f"Fout bij wisselen modus: {e}")
 
     def open_browse_window(self, event_type: str):
+        print("open_browse_window aangeroepen")
+        self.load_events()
         # Sluit bestaand browse venster als het er is
         if hasattr(self, 'browse_window') and self.browse_window and self.browse_window.winfo_exists():
             self.browse_window.destroy()
 
         self.browse_window = tk.Toplevel(self.root)
         self.browse_window.title(f"Browse {event_type}")
-        self.browse_window.geometry("1100x800")
+        self.browse_window.geometry("1100x800+0+0")
 
         # Titel
         title_label = ttk.Label(self.browse_window, text=f"Browse {event_type}", font=self.header_font)
@@ -511,7 +517,7 @@ class VoiceUI:
         self.details_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.event_details_text.pack(fill=tk.BOTH, expand=True)
 
-        self.load_events()
+
 
     def _close_browse_window(self):
         if hasattr(self, 'browse_window') and self.browse_window and self.browse_window.winfo_exists():
@@ -855,8 +861,16 @@ class VoiceUI:
             system_prompt=current_system_prompt,
             dynamic_context=current_dynamic_context)
 
-    def _open_prompt_editor(self, system_prompt: str, dynamic_context: str):
-        """Opent de editor met de opgegeven system prompt en dynamic context."""
+    def _open_prompt_editor(self, system_prompt, dynamic_context):
+        # Haal alleen de content van de role 'user' uit de dynamic_context
+        if isinstance(dynamic_context, list):
+            user_content = next(
+                (item["content"] for item in dynamic_context if item.get("role") == "user"),"")
+        else:
+            user_content = dynamic_context  # fallback als het toch een string is
+
+        # Nu kun je user_content gebruiken zoals je wilt, bijvoorbeeld:
+        dynamic_context_lines = user_content.split("\n")      
         # Sluit bestaande editor als die open is
         if self.prompts_window and self.prompts_window.winfo_exists():
             self.prompts_window.destroy()
@@ -902,7 +916,7 @@ class VoiceUI:
         self.dynamic_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Verwerk nieuwe regels correct
-        dynamic_context_lines = dynamic_context.split("\n")
+        dynamic_context_lines = user_content.split("\n")
         for line in dynamic_context_lines:
             self.dynamic_text_widget.insert(tk.END, line + "\n")
 

@@ -1638,9 +1638,7 @@ async def tts_request(sentence, order):
                 pcm_data: bytes = await response.read()
                 # apply trim + fade off the event loop
                 # off-load the CPU work:
-                pcm_data = await to_thread(
-                    partial(trim_and_fade, pcm_data)
-                )                
+                pcm_data = await asyncio.to_thread(trim_and_fade, pcm_data)              
                 audio_segments[order] = pcm_data
 
                 if order == 0:
