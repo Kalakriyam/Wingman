@@ -34,8 +34,8 @@ from datetime import datetime
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
-from ultimate_playback import play
-# from temp_playback import play
+# from ultimate_playback import play
+from new_playback import play
 from db_helpers import list_modes, add_mode, delete_mode
 from termcolor import colored
 from openai import AsyncOpenAI
@@ -49,8 +49,7 @@ from threading import Lock
 from typing import Optional, Literal, List, Dict, Any
 from enum import Enum
 from voice_ui import VoiceUI
-from open_stream import open_audio_output_stream
-from play_segment import play_audio_segment
+
 
 dotenv.load_dotenv()
 
@@ -1424,18 +1423,22 @@ async def initialize():
     # Start playing the initialization sound in a separate task
     script_dir = os.path.dirname(os.path.abspath(__file__))
     init_audio_path = os.path.join(script_dir, 'INITIALIZING.mp3')
-    first_audio = AudioSegment.from_mp3(init_audio_path)
+    # read the whole MP3 into memory (blocking is fine – the file is tiny)
+    with open(init_audio_path, 'rb') as mp3_file:
+        first_audio_bytes = mp3_file.read()
     
     # Prepare and start the TTS request for the welcome sentence
     sentence_order = 0
     welcome_sentence = "Hallo Alexander, waar wil je mee beginnen?"
     numbered_sentences[sentence_order] = welcome_sentence
     
-    init_sound_task = asyncio.create_task(asyncio.to_thread(play, first_audio))
+    init_sound_task = asyncio.create_task(asyncio.to_thread(play, first_audio_bytes))
+    print("Playing initialization sound...")
+    # await asyncio.to_thread(play(first_audio_bytes))
+    
     # Ensure the initialization sound has finished playing
     await init_sound_task
     # Start the TTS request and wait for it to complete
-    segment_ready_events[sentence_order] = asyncio.Event()
     asyncio.create_task(tts_request(welcome_sentence, sentence_order))
     
     # logging.info("Initialization complete.")
@@ -1604,15 +1607,17 @@ async def tts_request(sentence, order):
                 audio_data: bytes = await response.read()
 
                 # same non-blocking decode
-                audio = await asyncio.to_thread(AudioSegment.from_file,
-                                                io.BytesIO(audio_data),
-                                                format="mp3")
+                # audio = await asyncio.to_thread(AudioSegment.from_file,
+                #                                 io.BytesIO(audio_data),
+                #                                 format="mp3")
 
-                # optional trim & fade
-                if DEFAULT_TRIM_MS > 0 and len(audio) > DEFAULT_TRIM_MS:
-                    audio = audio[:-DEFAULT_TRIM_MS].fade_out(DEFAULT_FADE_MS)
+                # # optional trim & fade
+                # if DEFAULT_TRIM_MS > 0 and len(audio) > DEFAULT_TRIM_MS:
+                #     audio = audio[:-DEFAULT_TRIM_MS].fade_out(DEFAULT_FADE_MS)
 
-                audio_segments[order] = audio          # done
+                # audio = await asyncio.to_thread(miniaudio.mp3_read_s16, audio_data)
+
+                audio_segments[order] = audio_data          # done
                 if order == 0:
                     audio_ready_event.set()
                    
