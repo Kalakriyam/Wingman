@@ -208,6 +208,13 @@ class PromptProfile(BaseModel):
     dynamic_context: str
     voice: Optional[str] = None
 
+class Mode(BaseModel):       
+    name: str
+    system_prompt: str
+    dynamic_context: str
+    voice: Optional[str] = None
+    dynamic_tags: Optional[dict[str, bool]] = None
+
 class PromptsMessage(BaseModel):
     trigger_type: Optional[str] = None
     action_type: Optional[str] = None

@@ -1251,24 +1251,24 @@ class VoiceUI:
             return
 
         # Gebruik huidige prompt als basis
-        current_profile = self.prompts.get(self.current_prompt_profile)
-        if not current_profile:
-            self.error_label.config(text="Huidig prompt-profiel niet gevonden.")
+        current_mode = self.prompts.get(self.current_prompt_profile)
+        if not current_mode:
+            self.error_label.config(text="Huidige modus niet gevonden.")
             return
 
-        system_prompt = current_profile["current"]["system"]
-        dynamic_context = current_profile["current"]["dynamic"]
-        voice = current_profile.get("voice")
+        system_prompt = current_mode["current"]["system"]
+        dynamic_context = current_mode["current"]["dynamic"]
+        voice = current_mode.get("voice")
 
         try:
             # Directe aanroep van de PromptManager om een nieuw profiel op te slaan
-            new_profile = {
+            new_mode = {
                 "name": modus_naam,
                 "system_prompt": system_prompt,
                 "dynamic_context": dynamic_context,
                 "voice": voice
             }
-            self.prompt_manager.save_prompt_profile_sync(new_profile)
+            asyncio.run(self.prompt_manager.add_mode(new_mode))
 
             # Update de UI
             self.status_label.config(text=f"Nieuwe modus '{modus_naam}' toegevoegd als prompt-profiel.")      
