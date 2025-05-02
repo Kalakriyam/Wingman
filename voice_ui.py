@@ -236,10 +236,21 @@ class VoiceUI:
         self.prompts_control_frame = ttk.Frame(self.main_frame)
         self.prompts_control_frame.pack(pady=(0, 5))
 
-        self.pull_prompts_button = ttk.Button(self.prompts_control_frame, text="Pull Prompts", command=self._handle_pull_prompts)
+        # Pull Prompts Button
+        self.pull_prompts_button = ttk.Button(
+            self.prompts_control_frame,
+            text="Pull Prompts",
+            command=self._handle_pull_prompts
+        )
         self.pull_prompts_button.pack(side=tk.LEFT, padx=5)
 
-        self.edit_prompts_button = ttk.Button(self.prompts_control_frame, text="Edit Prompts", command=lambda: self.edit_prompt_profile(self.prompt_profile_var.get()), state=tk.DISABLED)
+        # Edit Prompts Button
+        self.edit_prompts_button = ttk.Button(
+            self.prompts_control_frame,
+            text="Edit Prompts",
+            command=self.edit_prompt_profile,  # Verbind direct met de nieuwe functie
+            state=tk.NORMAL  # Zorg dat de knop altijd beschikbaar is
+        )
         self.edit_prompts_button.pack(side=tk.LEFT, padx=5)
 
         self.push_prompts_button = ttk.Button(self.prompts_control_frame, text="Push Prompts", command=self._push_and_close_prompt, state=tk.DISABLED)
@@ -827,66 +838,37 @@ class VoiceUI:
             # Re-enable de knop
             self.refresh_modus_button.config(state=tk.NORMAL)
 
-    def edit_prompt_profile(self, profile_name="default"):
-        """Opent het editvenster voor een prompt-profiel, maar sluit eerst andere vensters netjes af."""
-        if not self.is_prompt_loaded(profile_name):
-            self.error_label.config(text=f"Profiel '{profile_name}' is nog niet geladen.")
-            return
-
+    def edit_prompt_profile(self):
+        """Haalt de huidige prompts op van de PromptManager en opent de editor."""
         self._clear_messages()
 
-        #  Check of messages-editor open is ---
-        if self.messages_window and self.messages_window.winfo_exists():
-            if self.messages_modified_flag:
-                response = messagebox.askyesnocancel(
-                    "Unsaved Message Changes",
-                    "Je hebt wijzigingen in het messages-venster.\nWil je die bewaren voordat je verdergaat?",
-                    parent=self.messages_window)
-                if response is True:
-                    if not self._keep_message_changes():
-                        return  # Parse error, blijf in messages-venster
-                elif response is None:
-                    return  # Cancel gedrukt
-                # False = doorgaan zonder bewaren
-
-            self.messages_window.destroy()
-            self.messages_window = None
-            self.messages_text_widget = None
-
-        #  Check of prompts-editor al open is ---
-        if self.prompts_window and self.prompts_window.winfo_exists():
-            if self.prompts_modified_flag:
-                response = messagebox.askyesnocancel(
-                    "Unsaved Prompt Changes",
-                    "Je hebt wijzigingen in het prompts-venster.\nWil je die bewaren voordat je verdergaat?",
-                    parent=self.prompts_window)
-                if response is True:
-                    if not self._keep_prompt_changes():
-                        return  # Parse error, blijf in prompts-venster
-                elif response is None:
-                    return  # Cancel gedrukt
-                # False = doorgaan zonder bewaren
-
-            self.prompts_window.destroy()
-            self.prompts_window = None
-            self.system_text_widget = None
-            self.dynamic_text_widget = None
-
-        # Profiel ophalen ---
-        if profile_name not in self.prompts:
-            self.error_label.config(text=f"Profiel '{profile_name}' niet gevonden.")
+        # Vraag de huidige prompts op van de PromptManager
+        try:
+            current_system_prompt = self.prompt_manager.get_current_system_prompt()
+            current_dynamic_context = self.prompt_manager.get_current_dynamic_context()
+        except Exception as e:
+            self.error_label.config(text=f"Fout bij ophalen prompts: {e}")
             return
 
-        self.current_prompt_profile = profile_name
-        current_data = self.prompts[profile_name]["current"]
-        system_text = current_data.get("system", "")
-        dynamic_text = current_data.get("dynamic", "")
+        # Open de editor met de opgehaalde prompts
+        self._open_prompt_editor(
+            system_prompt=current_system_prompt,
+            dynamic_context=current_dynamic_context)
 
-        #  Nieuw venster openen ---
+    def _open_prompt_editor(self, system_prompt: str, dynamic_context: str):
+        """Opent de editor met de opgegeven system prompt en dynamic context."""
+        # Sluit bestaande editor als die open is
+        if self.prompts_window and self.prompts_window.winfo_exists():
+            self.prompts_window.destroy()
+
+        # Maak een nieuw venster voor de editor
         self.prompts_window = tk.Toplevel(self.root)
-        self.prompts_window.title(f"Edit Prompt Profile: {profile_name}")
-        self.prompts_window.geometry("800x800")
-        self.prompts_window.protocol("WM_DELETE_WINDOW", self._handle_prompt_back)
+        self.prompts_window.title("Edit Current Prompts")
+
+        # Geometrie instellen: linkerhelft van het scherm
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        self.prompts_window.geometry(f"{screen_width // 2}x{screen_height}+0+0")
 
         main_frame = ttk.Frame(self.prompts_window, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -896,14 +878,14 @@ class VoiceUI:
         system_label.pack(anchor="w")
 
         system_frame = ttk.Frame(main_frame)
-        system_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10)) 
+        system_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
         system_scrollbar = ttk.Scrollbar(system_frame)
         system_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.system_text_widget = tk.Text(system_frame, height=10, wrap=tk.WORD, font=self.editor_font, yscrollcommand=system_scrollbar.set)
         self.system_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.system_text_widget.insert("1.0", system_text)
+        self.system_text_widget.insert("1.0", system_prompt)
         system_scrollbar.config(command=self.system_text_widget.yview)
 
         # Dynamic Context
@@ -918,16 +900,13 @@ class VoiceUI:
 
         self.dynamic_text_widget = tk.Text(dynamic_frame, height=10, wrap=tk.WORD, font=self.editor_font, yscrollcommand=dynamic_scrollbar.set)
         self.dynamic_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.dynamic_text_widget.insert("1.0", dynamic_text)
+
+        # Verwerk nieuwe regels correct
+        dynamic_context_lines = dynamic_context.split("\n")
+        for line in dynamic_context_lines:
+            self.dynamic_text_widget.insert(tk.END, line + "\n")
+
         dynamic_scrollbar.config(command=self.dynamic_text_widget.yview)
-
-        # Reset modified flags *na* vullen
-        self.system_text_widget.edit_modified(False)
-        self.dynamic_text_widget.edit_modified(False)
-
-        # Bind wijzigingen *na* reset
-        self.system_text_widget.bind("<<Modified>>", self._on_prompt_modified)
-        self.dynamic_text_widget.bind("<<Modified>>", self._on_prompt_modified)
 
         # Knoppen
         button_frame = ttk.Frame(main_frame)
@@ -935,14 +914,8 @@ class VoiceUI:
 
         ttk.Button(button_frame, text="Back", command=self._handle_prompt_back).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Push & Close", command=self._push_and_close_prompt).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Save As...", command=self._save_prompt_as).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Delete", command=self._delete_prompt_profile).pack(side=tk.LEFT, padx=5)
-        # ttk.Button(button_frame, text="Keep Changes", command=self._keep_prompt_changes).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Undo All Changes", command=self._undo_all_prompt_changes).pack(side=tk.LEFT, padx=5)
-
-
-        self.prompts_modified_flag = False
-
+        
     def _pull_current_mode(self):
         self._clear_messages()
         try:

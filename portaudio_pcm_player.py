@@ -4,7 +4,7 @@ from ctypes import (
     c_int, c_ulong, c_void_p, c_double
 )
 from pathlib import Path
-verbose: bool = False
+# verbose: bool = False
 
 # ── PortAudio DLL ───────────────────────────────────────────────────────
 dll_path = Path.cwd() / "portaudio" / "portaudio.dll"
@@ -60,15 +60,15 @@ def play(pcm_bytes: bytes, sample_rate: int, channels: int = 1) -> None:
     samples  = len(pcm_bytes) // 2        # 16-bit
     pcm_buf  = (ctypes.c_int16 * samples).from_buffer_copy(pcm_bytes)
 
-    if verbose:
-        print("--- play() called ---")
-        print(f"pcm bytes: {len(pcm_bytes)}   samples: {len(pcm_bytes)//2}")
-        print(f"sample_rate={sample_rate}   channels={channels}")
+    # if verbose:
+    #     print("--- play() called ---")
+    #     print(f"pcm bytes: {len(pcm_bytes)}   samples: {len(pcm_bytes)//2}")
+    #     print(f"sample_rate={sample_rate}   channels={channels}")
 
     _pa_ok(pa.Pa_Initialize(), "Pa_Initialize failed")
     ret = pa.Pa_Initialize()
-    if verbose:
-        print("Pa_Initialize →", ret)
+    # if verbose:
+    #     print("Pa_Initialize →", ret)
     _pa_ok(ret, "Pa_Initialize failed")
 
     stream = c_void_p()

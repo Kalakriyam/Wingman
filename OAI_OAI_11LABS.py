@@ -21,9 +21,11 @@ import tkinter as tk
 import pyperclip
 import miniaudio
 import numpy as np
+import pathlib
 # import pydantic
 # from mcp.server.fastmcp import FastMCP
 import aiosqlite
+from array import array
 from aiohttp import TCPConnector, AsyncResolver
 from asyncio import to_thread
 from fastapi import FastAPI, HTTPException
@@ -35,6 +37,7 @@ from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
 # from ultimate_playback import play
+from functools import partial
 from portaudio_pcm_player import play
 from db_helpers import list_modes, add_mode, delete_mode
 from termcolor import colored
@@ -518,46 +521,43 @@ model_options = ["gpt-4o-2024-11-20", "chatgpt-4o-latest", "gpt-4.1", "gpt-4.1-m
 current_model_index = 0
 
 
-async def fetch_elevenlabs_audio(text: str) -> AudioSegment:
-    voice_id = communication_manager.voice_id
+async def fetch_elevenlabs_audio(text: str) -> bytes | None:
     """
-    Asynchronously makes a POST to ElevenLabs to synthesize 'text', using a
-    semaphore to limit concurrent requests.  Returns a pydub AudioSegment
-    (or None on failure).
+    Fetch 24 kHz / 16-bit / mono PCM from ElevenLabs.
+    Suitable for  `play(pcm_bytes, 24000)`.
     """
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    voice_id            = communication_manager.voice_id
+    PCM_OUTPUT_FORMAT   = "pcm_24000"          # 24 kHz, 16-bit, mono
+    ELEVENLABS_ENDPOINT = (
+        f"https://api.elevenlabs.io/v1/text-to-speech/"
+        f"{voice_id}/stream?output_format={PCM_OUTPUT_FORMAT}"
+    )
+
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json",
     }
-    data = {
-        "text": text,
-        "model_id": MODEL_ID,
-    }
+    payload = {"text": text, "model_id": MODEL_ID}
 
     try:
-        async with tts_semaphore:  # Acquire the semaphore
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=data) as resp:
-                    resp.raise_for_status()  # Raise HTTPError for bad requests
-                    audio_data = await resp.read()
+        async with tts_semaphore:                       # limit concurrency
+            async with aiohttp.ClientSession() as http: # throw-away session
+                async with http.post(
+                    ELEVENLABS_ENDPOINT,
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                ) as resp:
+                    resp.raise_for_status()
+                    pcm_bytes_from_elevenlabs = await resp.read()
+                    return pcm_bytes_from_elevenlabs   # <─ raw bytes only
 
-                    # Convert raw bytes -> AudioSegment
-                    try:
-                        return AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
-                    except CouldntDecodeError:
-                        print(f"Error: Could not decode audio data for '{text}'.")
-                        return None
-                    except Exception as e:
-                        print(f"Error processing audio for '{text}': {e}")
-                        return None
+    except aiohttp.ClientError as err:
+        print(f"ElevenLabs HTTP error for '{text}': {err}")
+    except Exception as err:
+        print(f"ElevenLabs unexpected error for '{text}': {err}")
 
-    except aiohttp.ClientError as e:
-        print(f"Error during ElevenLabs API request for '{text}': {e}")
-        return None
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return None
+    return None
 
 async def generate_model_audio_segments():
     """
@@ -1006,7 +1006,7 @@ def cycle_llm():
     if segment:
         print(f"Switched LLM to: {new_model}")
         # If ready, play it (blocking, but short)
-        play(segment)
+        play(segment, 24000)
     else:
         # If not ready or an error happened, only print
         print(f"Switched LLM to: {new_model}")
@@ -1439,15 +1439,20 @@ async def initialize():
     welcome_sentence = "Hallo Alexander, waar wil je mee beginnen?"
     numbered_sentences[sentence_order] = welcome_sentence
     
-    # init_sound_task = asyncio.create_task(asyncio.to_thread(play, first_audio_bytes))
-    print("Playing initialization sound...")
+
+    
+    # print("Playing initialization sound...")
+
     # await asyncio.to_thread(play(first_audio_bytes))
+    # init_sound_task = asyncio.create_task(asyncio.to_thread(play, first_audio_bytes))    
     
     # Ensure the initialization sound has finished playing
     # await init_sound_task
     # Start the TTS request and wait for it to complete
     asyncio.create_task(tts_request(welcome_sentence, sentence_order))
-    
+    # print("version:", miniaudio.__version__)
+    # print("from:", pathlib.Path(miniaudio.__file__).resolve())
+
     # logging.info("Initialization complete.")
 
 def split_into_sentences(text):
@@ -1553,6 +1558,22 @@ def split_into_sentences(text):
 #     except Exception as e:
 #         print(f"TTS API error for sentence {order} ({sentence}): {e}")
 
+def trim_and_fade(pcm_bytes: bytes,
+                  *, trim_ms: int = 180, fade_ms: int = 30,
+                  sr: int = 24_000) -> bytes:
+    BYTES_PER_SAMPLE = 2
+    trim = trim_ms * sr // 1000
+    fade = fade_ms * sr // 1000
+
+    samples = np.frombuffer(pcm_bytes, dtype='<i2').copy()   # writable
+    if trim:
+        samples = samples[:-trim]
+
+    if fade:
+        ramp = np.linspace(1.0, 0.0, fade, endpoint=False, dtype=np.float32)
+        samples[-fade:] = (samples[-fade:] * ramp).astype(np.int16)
+
+    return samples.tobytes()
 
 async def tts_request(sentence, order):
     voice_id = communication_manager.voice_id
@@ -1615,6 +1636,11 @@ async def tts_request(sentence, order):
 
                 # ★ grab the whole PCM buffer at once
                 pcm_data: bytes = await response.read()
+                # apply trim + fade off the event loop
+                # off-load the CPU work:
+                pcm_data = await to_thread(
+                    partial(trim_and_fade, pcm_data)
+                )                
                 audio_segments[order] = pcm_data
 
                 if order == 0:
@@ -2228,7 +2254,7 @@ class CommunicationManager:
         self.obsidian_content: str = ""
         self.obsidian_title: str = ""
         self.midi_details: str = ""
-        self.voice_name: str = "Robert"  # Default stemnaam
+        self.voice_name: str = "George"  # Default stemnaam
         self.voice_id: str = "BtWabtumIemAotTjP5sk" # Default stem-code
         self._lock = asyncio.Lock()
         self.summary: str = ""
@@ -2843,7 +2869,7 @@ class SettingsManager:
     
 async def main():
     
-    # os.system("cls")
+    os.system("cls")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     
