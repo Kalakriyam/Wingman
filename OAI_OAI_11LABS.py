@@ -35,7 +35,7 @@ from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
 # from ultimate_playback import play
-from new_playback import play
+from portaudio_pcm_player import play
 from db_helpers import list_modes, add_mode, delete_mode
 from termcolor import colored
 from openai import AsyncOpenAI
@@ -1432,12 +1432,12 @@ async def initialize():
     welcome_sentence = "Hallo Alexander, waar wil je mee beginnen?"
     numbered_sentences[sentence_order] = welcome_sentence
     
-    init_sound_task = asyncio.create_task(asyncio.to_thread(play, first_audio_bytes))
+    # init_sound_task = asyncio.create_task(asyncio.to_thread(play, first_audio_bytes))
     print("Playing initialization sound...")
     # await asyncio.to_thread(play(first_audio_bytes))
     
     # Ensure the initialization sound has finished playing
-    await init_sound_task
+    # await init_sound_task
     # Start the TTS request and wait for it to complete
     asyncio.create_task(tts_request(welcome_sentence, sentence_order))
     
@@ -1549,14 +1549,18 @@ def split_into_sentences(text):
 
 async def tts_request(sentence, order):
     voice_id = communication_manager.voice_id
+    PCM_FORMAT = "pcm_24000"  # raw 24 kHz 16-bit mono
     try:
         async with tts_semaphore:
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+            url = (
+                f"https://api.elevenlabs.io/v1/text-to-speech/"
+                f"{voice_id}/stream?output_format={PCM_FORMAT}"
+            )
             headers = {
                 "xi-api-key": ELEVENLABS_API_KEY,
                 "Content-Type": "application/json",
             }
-            
+
             # Base request data
             data = {
                 "text": sentence,
@@ -1565,20 +1569,20 @@ async def tts_request(sentence, order):
 
             # More efficient collection of previous context
             previous_sentences = []
-            for i in range(1, 5):  # Check up to 4 sentences
+            for i in range(1, 5):
                 if order >= i:
                     prev_sentence = numbered_sentences.get(order - i)
                     if prev_sentence is not None and audio_segments.get(order - i) != "EMPTYLINE":
                         previous_sentences.append(prev_sentence)
-                        if len(previous_sentences) == 2:  # Two 'non-None' sentences are enough
+                        if len(previous_sentences) == 2:
                             break
 
             if previous_sentences:
-                data["previous_text"] = " ".join(previous_sentences[::-1])  # Reverse to maintain original order
+                data["previous_text"] = " ".join(previous_sentences[::-1])
 
             # More efficient collection of next context
             next_sentences = []
-            for i in range(1, 5):  # Check up to 4 sentences
+            for i in range(1, 5):
                 next_sentence = numbered_sentences.get(order + i)
                 if next_sentence is not None and audio_segments.get(order + i) != "EMPTYLINE":
                     next_sentences.append(next_sentence)
@@ -1590,8 +1594,7 @@ async def tts_request(sentence, order):
 
             # Encode data using orjson and pass as bytes to 'data' parameter
             json_payload = orjson.dumps(data)
-            
-            # Use the global session with performance optimizations
+
             async with global_http_session.post(
                 url,
                 headers=headers,
@@ -1603,26 +1606,15 @@ async def tts_request(sentence, order):
                     print(f"ElevenLabs API error: Status {response.status}, Response: {error_text}")
                     raise Exception(f"ElevenLabs API returned status {response.status}")
 
-                # ★ grab the whole MP3 at once
-                audio_data: bytes = await response.read()
+                # ★ grab the whole PCM buffer at once
+                pcm_data: bytes = await response.read()
+                audio_segments[order] = pcm_data
 
-                # same non-blocking decode
-                # audio = await asyncio.to_thread(AudioSegment.from_file,
-                #                                 io.BytesIO(audio_data),
-                #                                 format="mp3")
-
-                # # optional trim & fade
-                # if DEFAULT_TRIM_MS > 0 and len(audio) > DEFAULT_TRIM_MS:
-                #     audio = audio[:-DEFAULT_TRIM_MS].fade_out(DEFAULT_FADE_MS)
-
-                # audio = await asyncio.to_thread(miniaudio.mp3_read_s16, audio_data)
-
-                audio_segments[order] = audio_data          # done
                 if order == 0:
                     audio_ready_event.set()
-                   
+
     except Exception as e:
-        print(f"TTS API error for sentence {order} ({sentence}): {e}")
+        print(f"TTS API error for sentence {order}: {e}")
 
 
 # async def manage_audio_playback() -> None:
@@ -1669,6 +1661,7 @@ async def manage_audio_playback():
     
     while True:
         while audio_segments.get(audio_order) is not None:
+            # print("\rwe zitten in de while loop")
             content = audio_segments[audio_order]
 
             if content == "MIDI_COMMAND":
@@ -1688,8 +1681,9 @@ async def manage_audio_playback():
                     nonewline = nospace[1:] if nospace.startswith("\n") else nospace
                     
                     print (nonewline)
-                    
-                await asyncio.to_thread(play, content)
+
+                # print("we gaan nu de play functie aanroepen")
+                await asyncio.to_thread(play, content, 24_000)
             
             audio_order += 1
 
