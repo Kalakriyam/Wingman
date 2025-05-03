@@ -2253,7 +2253,7 @@ class CommunicationManager:
         self.obsidian_title: str = ""
         self.midi_details: str = ""
         self.voice_name: str = "George"  # Default stemnaam
-        self.voice_id: str = "BtWabtumIemAotTjP5sk" # Default stem-code
+        self.voice_id: str = "Yko7PKHZNXotIFUBG7I9" # Default stem-code
         self._lock = asyncio.Lock()
         self.summary: str = ""
 
@@ -2867,7 +2867,7 @@ class SettingsManager:
     
 async def main():
     
-    os.system("cls")
+    # os.system("cls")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     

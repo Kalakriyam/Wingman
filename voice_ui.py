@@ -51,16 +51,42 @@ class VoiceUI:
         self.root = root
         self.root.title("Voice UI")
 
-        # Hoofdscherm geometrie instellen
+        # --- GEOMETRY ATTEMPT 5: wm_manage ---
         self.root.update_idletasks()
-        border_width = self.root.winfo_rootx() - self.root.winfo_x()
-        titlebar_height = self.root.winfo_rooty() - self.root.winfo_y()
+
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        window_width = screen_width // 2 - border_width * 2
-        window_height = screen_height - titlebar_height - border_width
-        self.root.geometry(f"{window_width}x{window_height}+0+0")
-        
+        window_width = screen_width // 2
+        window_height = screen_height
+
+        # 1. Withdraw the window initially to prevent flickering
+        self.root.withdraw()
+
+        # 2. Set the desired geometry (still asking for +0+0)
+        initial_geometry = f"{window_width}x{window_height}+0+0"
+        print(f"Setting geometry: {initial_geometry}")
+        self.root.geometry(initial_geometry)
+
+        # 3. Ask Tk to manage the window placement
+        # This might interact differently with the window manager
+        self.root.update_idletasks()
+        # No explicit 'wm_manage', geometry + deiconify handles it.
+
+        # 4. Deiconify (show) the window
+        # The window manager places it based on the request
+        self.root.deiconify()
+        self.root.update_idletasks()
+
+        # 5. Measure *after* showing
+        actual_screen_x = self.root.winfo_rootx()
+        print(f"Measured final X position: {actual_screen_x}")
+        if actual_screen_x > 0:
+             print(f"Note: Window manager still placed window at X={actual_screen_x}, creating a gap.")
+             # At this point, attempting a negative offset failed before,
+             # so we likely have to accept this gap or use platform tools.
+
+        # --- End GEOMETRY ATTEMPT 5 ---
+    
         self.communication_manager = communication_manager
         self.prompt_manager = prompt_manager
         self.event_manager = event_manager
@@ -375,11 +401,36 @@ class VoiceUI:
 
     def open_browse_window(self, event_type: str):
         print("open_browse_window aangeroepen")
-        self.load_events()
         # Sluit bestaand browse venster als het er is
         if hasattr(self, 'browse_window') and self.browse_window and self.browse_window.winfo_exists():
             self.browse_window.destroy()
 
+        # --- Create the necessary Tkinter variables FIRST ---
+        # Event type dropdown variable
+        self.event_type_options = [
+            ("Conversations", "ConversationState"),
+            ("Ideas", "IdeaEvent"),
+            ("Journal Events", "JournalEvent")
+        ]
+        event_type_labels = [label for label, _ in self.event_type_options]
+        # Determine the default value based on the incoming event_type parameter
+        default_label = "Conversations" # Fallback default
+        for label, val in self.event_type_options:
+            if val == event_type:
+                default_label = label
+                break
+        self.event_type_var = tk.StringVar(value=default_label)
+
+        # Periode dropdown variable
+        self.period_options = ["Today", "2 Days", "3 Days", "1 Week", "Pick Date", "Pick Range"]
+        self.period_var = tk.StringVar(value=self.period_options[0]) # Default to "Today"
+
+        # --- NOW call load_events, as the variables exist ---
+        # Note: We call load_events *before* creating the window to ensure data is ready
+        # This might feel slightly backwards, but avoids the AttributeError
+        # self.load_events() # Initial load call happens after variables are set
+
+        # --- Create the Browse Window ---
         self.browse_window = tk.Toplevel(self.root)
         self.browse_window.title(f"Browse {event_type}")
         self.browse_window.geometry("1100x800+0+0")
@@ -391,6 +442,39 @@ class VoiceUI:
         # --- Dropdowns Frame ---
         dropdowns_frame = ttk.Frame(self.browse_window)
         dropdowns_frame.pack(fill=tk.X, pady=(10, 10), padx=10)
+
+        # --- Linker controls (dropdowns + refresh) ---
+        left_controls_frame = ttk.Frame(dropdowns_frame)
+        left_controls_frame.pack(side=tk.LEFT)
+
+        # Periode dropdown widget (uses the pre-created self.period_var)
+        period_dropdown = ttk.Combobox(
+            left_controls_frame, textvariable=self.period_var, values=self.period_options, state="readonly", width=12
+        )
+        period_dropdown.pack(side=tk.LEFT, padx=(0, 10))
+        # Bind trace *after* combobox creation if needed, but load_events already called once
+        self.period_var.trace_add("write", lambda *args: self.load_events())
+
+
+        # Event type dropdown widget (uses the pre-created self.event_type_var)
+        event_type_dropdown = ttk.Combobox(
+            left_controls_frame, textvariable=self.event_type_var, values=event_type_labels, state="readonly", width=16
+        )
+        event_type_dropdown.pack(side=tk.LEFT)
+        # Bind trace *after* combobox creation if needed
+        self.event_type_var.trace_add("write", lambda *args: self.load_events())
+
+
+        self.refresh_events_button = ttk.Button(
+            left_controls_frame,
+            text="Refresh",
+            command=self.load_events  # Command directly calls load_events
+        )
+        self.refresh_events_button.pack(side=tk.LEFT, padx=(10, 0))
+
+        # --- Rechterkant: Exit knop ---
+        self.exit_browse_button = ttk.Button(dropdowns_frame, text="Exit", command=self._close_browse_window)
+        self.exit_browse_button.pack(side=tk.RIGHT, padx=(10, 0))
 
         # --- Button Row ---
         button_row = ttk.Frame(self.browse_window)
@@ -417,54 +501,11 @@ class VoiceUI:
         self.undo_details_button = ttk.Button(button_row, text="Undo Changes", command=self._undo_changes_to_summary)
         self.undo_details_button.pack(side=tk.LEFT, padx=(5, 0))
 
-        
+
         # --- statuslabel ---
-        self.browse_status_label = ttk.Label(self.browse_window, text="", foreground="green") 
+        self.browse_status_label = ttk.Label(self.browse_window, text="", foreground="green")
         self.browse_status_label.pack(anchor="w", padx=10, pady=(0, 5))
 
-        # --- Linker controls (dropdowns + refresh) ---
-        left_controls_frame = ttk.Frame(dropdowns_frame)
-        left_controls_frame.pack(side=tk.LEFT)
-
-        # Periode dropdown
-        self.period_options = ["Today", "2 Days", "3 Days", "1 Week", "Pick Date", "Pick Range"]
-        self.period_var = tk.StringVar(value=self.period_options[0])
-        period_dropdown = ttk.Combobox(
-            left_controls_frame, textvariable=self.period_var, values=self.period_options, state="readonly", width=12
-        )
-        period_dropdown.pack(side=tk.LEFT, padx=(0, 10))
-
-        # Event type dropdown
-        self.event_type_options = [
-            ("Conversations", "ConversationState"),
-            ("Ideas", "IdeaEvent"),
-            ("Journal Events", "JournalEvent")
-        ]
-        event_type_labels = [label for label, _ in self.event_type_options]
-        self.event_type_var = tk.StringVar(value=event_type_labels[
-            [et for et, val in self.event_type_options].index(
-                {"ConversationState": "Conversations", "IdeaEvent": "Ideas", "JournalEvent": "Journal Events"}[event_type])
-        ] if event_type in ["ConversationState", "IdeaEvent", "JournalEvent"] else event_type_labels[0])
-        event_type_dropdown = ttk.Combobox(
-            left_controls_frame, textvariable=self.event_type_var, values=event_type_labels, state="readonly", width=16
-        )
-        event_type_dropdown.pack(side=tk.LEFT)
-
-        self.refresh_events_button = ttk.Button(
-            left_controls_frame,
-            text="Refresh",
-            command=self.load_events
-        )
-        self.refresh_events_button.pack(side=tk.LEFT, padx=(10, 0))
-
-        # --- Rechterkant: Exit knop ---
-        self.exit_browse_button = ttk.Button(dropdowns_frame, text="Exit", command=self._close_browse_window)
-        self.exit_browse_button.pack(side=tk.RIGHT, padx=(10, 0))
-
-
-        # Bind dropdowns aan load_events
-        self.period_var.trace_add("write", lambda *args: self.load_events())
-        self.event_type_var.trace_add("write", lambda *args: self.load_events())
 
         # --- Main Split Frame ---
         main_split = ttk.Frame(self.browse_window)
@@ -477,6 +518,7 @@ class VoiceUI:
         event_list_label = ttk.Label(event_list_frame, text="Event IDs")
         event_list_label.pack(anchor="w")
 
+        # Initialize event_id_listbox and scrollbar *before* load_events populates it
         self.event_id_listbox = tk.Listbox(event_list_frame, width=17, height=30)
         self.event_id_listbox.pack(side=tk.LEFT, fill=tk.Y, expand=True)
 
@@ -484,8 +526,9 @@ class VoiceUI:
         self.event_id_listbox.config(yscrollcommand=self.event_list_scrollbar.set)
         self.event_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.event_id_listbox.config(font=self.editor_font)  # 👈 hier
+        self.event_id_listbox.config(font=self.editor_font)
         self.event_id_listbox.bind("<<ListboxSelect>>", self.show_event_details)
+
         # --- Event Details (rechts) ---
         details_frame = ttk.Frame(main_split)
         details_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -494,30 +537,35 @@ class VoiceUI:
         details_label.pack(anchor="w")
 
         # --- Summary Frame boven messages ---
-        self.summary_frame = ttk.Frame(details_frame)
+        self.summary_frame = ttk.Frame(details_frame) # Re-use the attribute name, that's fine
         self.summary_frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.summary_scrollbar = ttk.Scrollbar(self.summary_frame, orient=tk.VERTICAL)        
-        self.summary_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Initialize summary_text and scrollbar *before* load_events tries to clear it
+        summary_scrollbar_browse = ttk.Scrollbar(self.summary_frame, orient=tk.VERTICAL) # Use a distinct variable name if needed
+        summary_scrollbar_browse.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.summary_text = tk.Text(
+        self.summary_text = tk.Text( # This will be the one used by load_events/show_details
             self.summary_frame,
             height=3,
             wrap=tk.WORD,
             font=self.editor_font,
-            yscrollcommand=self.summary_scrollbar.set,
+            yscrollcommand=summary_scrollbar_browse.set,
             state=tk.DISABLED
         )
         self.summary_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.summary_scrollbar.config(command=self.summary_text.yview)
+        summary_scrollbar_browse.config(command=self.summary_text.yview)
 
+
+        # Initialize event_details_text and scrollbar *before* load_events tries to clear it
         self.event_details_text = tk.Text(details_frame, wrap=tk.WORD, height=30, font=self.editor_font)
-        self.details_scrollbar = ttk.Scrollbar(details_frame, orient=tk.VERTICAL, command=self.event_details_text.yview)      
+        self.details_scrollbar = ttk.Scrollbar(details_frame, orient=tk.VERTICAL, command=self.event_details_text.yview)
         self.event_details_text.config(yscrollcommand=self.details_scrollbar.set)
         self.details_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.event_details_text.pack(fill=tk.BOTH, expand=True)
 
-
+        # --- Call load_events AGAIN here to populate the listbox and reset fields ---
+        # This ensures the widgets exist before population/resetting occurs
+        self.load_events()
 
     def _close_browse_window(self):
         if hasattr(self, 'browse_window') and self.browse_window and self.browse_window.winfo_exists():
@@ -528,66 +576,136 @@ class VoiceUI:
         # --- Event ophalen en tonen ---
     def load_events(self):
         """Load events directly from the EventManager."""
-        print("load_events aangeroepen")
+        print("--- load_events CALLED ---") # Start marker
+
+        # Ensure browse window and listbox exist before proceeding
+        if not hasattr(self, 'browse_window') or not self.browse_window or not self.browse_window.winfo_exists() or \
+           not hasattr(self, 'event_id_listbox') or not self.event_id_listbox:
+            print("load_events: Browse window or listbox not ready. Aborting.")
+            return
 
         # Haal de specifieke conversation ID op
         try:
-            self.specific_conversation_id = self.event_manager.get_setting("specific_conversation_id")        
+            self.specific_conversation_id = self.event_manager.get_setting("specific_conversation_id")
+            print(f"Specific Conversation ID loaded: {self.specific_conversation_id}")
         except Exception as e:
             print(f"Kon specifieke conversatie niet ophalen: {e}")
             self.specific_conversation_id = None
 
-        self.event_id_map = {}  # display_id → full_id   
+        self.event_id_map = {}  # display_id → full_id
 
         # Haal gekozen event_type op
-        event_type_label = self.event_type_var.get()
-        event_type = next(val for label, val in self.event_type_options if label == event_type_label)
+        try:
+            event_type_label = self.event_type_var.get()
+            # Find the corresponding value ('ConversationState', 'IdeaEvent', etc.)
+            event_type = next((val for label, val in self.event_type_options if label == event_type_label), None)
+            if not event_type:
+                 print(f"ERROR: Could not find event type value for label: {event_type_label}")
+                 return # Stop if type is invalid
+            print(f"Selected Event Type Label: {event_type_label}, Value: {event_type}")
+        except Exception as e:
+            print(f"ERROR reading event_type_var: {e}")
+            # Optionally set a default or return
+            event_type = "ConversationState" # Fallback example
+            print(f"Falling back to event_type: {event_type}")
+            # return # Or maybe just return here
 
         # Bepaal de datums op basis van de periode-dropdown
-        period = self.period_var.get()
-        today = datetime.today().date()
-
-        if period == "Today":
-            dates = [today.strftime("%Y-%m-%d")]
-        elif period == "2 Days":
-            dates = [(today - timedelta(days=1)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
-        elif period == "3 Days":
-            dates = [(today - timedelta(days=2)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
-        elif period == "1 Week":
-            dates = [(today - timedelta(days=6)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
-        else:
-            dates = [today.strftime("%Y-%m-%d")]  # fallback
-
         try:
+            period = self.period_var.get()
+            print(f"Selected Period: {period}")
+            today = datetime.today().date()
+
+            if period == "Today":
+                dates = [today.strftime("%Y-%m-%d")]
+            elif period == "2 Days":
+                # Correct range includes today and yesterday
+                dates = [(today - timedelta(days=1)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
+            elif period == "3 Days":
+                 # Correct range includes today and two days prior
+                dates = [(today - timedelta(days=2)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
+            elif period == "1 Week":
+                 # Correct range includes today and six days prior
+                dates = [(today - timedelta(days=6)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
+            # Add handling for "Pick Date" and "Pick Range" if implemented later
+            else: # Default/fallback
+                dates = [today.strftime("%Y-%m-%d")]
+            print(f"Calculated Date(s): {dates}")
+        except Exception as e:
+            print(f"ERROR reading period_var or calculating dates: {e}")
+            dates = [datetime.today().date().strftime("%Y-%m-%d")] # Fallback
+            print(f"Falling back to dates: {dates}")
+            # return # Or return
+
+        event_ids = [] # Initialize
+        try:
+            print(f"Calling EventManager with dates: {dates}, event_type: {event_type}")
             # Directe aanroep van de EventManager
             if len(dates) == 1:
                 event_ids = self.event_manager.list_event_ids_by_date(dates[0], event_type)
             elif len(dates) == 2:
-                event_ids = self.event_manager.list_event_ids_by_range(dates[0], dates[1], event_type)        
-            else:
+                event_ids = self.event_manager.list_event_ids_by_range(dates[0], dates[1], event_type)
+            else: # Should not happen with current logic, but good practice
                 event_ids = []
+            print(f"EventManager returned event IDs: {event_ids}") # <<< IMPORTANT PRINT
+            if event_ids is None: # Explicitly check for None return
+                 print("WARNING: EventManager returned None for event IDs. Treating as empty list.")
+                 event_ids = []
+
         except Exception as e:
-            print(f"Fout bij ophalen events: {e}")
+            print(f"!!! EXCEPTION during EventManager.list_event_ids: {e}")
+            # Optionally display this error in the UI status label
+            if hasattr(self, 'browse_status_label') and self.browse_status_label:
+                 self.browse_status_label.config(text=f"Error loading events: {e}", foreground="red")
             event_ids = []
 
         # Update de UI met de opgehaalde events
+        print("Clearing event_id_listbox...")
         self.event_id_listbox.delete(0, tk.END)
-        for event_id in event_ids:
-            match = re.search(r"\d{4}", event_id)
-            display_id = event_id[match.start():] if match else event_id
+        print(f"Populating listbox with {len(event_ids)} items...")
+        if not event_ids:
+             print("No event IDs found to display.")
+        else:
+            for event_id in event_ids:
+                if not event_id or not isinstance(event_id, str):
+                    print(f"  Skipping invalid event_id: {event_id}")
+                    continue
 
-            if event_id == self.specific_conversation_id:
+                # --- CORRECTED display_id generation ---
+                # Assuming the timestamp is always the last 14 characters
+                display_id = event_id[-14:] if len(event_id) >= 14 else event_id
+                # --- End Correction ---
 
-                display_id += " ★"
+                if event_id == self.specific_conversation_id:
+                    display_id += " ★"
+                    print(f"  Adding display_id: {display_id} (Specific) from Full ID: {event_id}")
+                else:
+                    print(f"  Adding display_id: {display_id} from Full ID: {event_id}")
 
-            self.event_id_map[display_id] = event_id     
-            self.event_id_listbox.insert(tk.END, display_id)
+                self.event_id_map[display_id] = event_id # Store mapping
+                self.event_id_listbox.insert(tk.END, display_id)
 
         # Reset de details en summary velden
-        self.event_details_text.delete("1.0", tk.END)
-        self.summary_text.config(state=tk.NORMAL)
-        self.summary_text.delete("1.0", tk.END)
-        self.summary_text.config(state=tk.DISABLED)
+        print("Resetting detail/summary text fields...")
+        try:
+            if hasattr(self, 'event_details_text') and self.event_details_text:
+                # Details text should be editable when cleared, then disabled? Usually populated on selection.
+                self.event_details_text.config(state=tk.NORMAL)
+                self.event_details_text.delete("1.0", tk.END)
+                self.event_details_text.config(state=tk.DISABLED) # Disable until selection
+            else: print("event_details_text widget not found for reset.")
+
+            if hasattr(self, 'summary_text') and self.summary_text:
+                self.summary_text.config(state=tk.NORMAL)
+                self.summary_text.delete("1.0", tk.END)
+                self.summary_text.config(state=tk.DISABLED) # Disable until selection
+            else: print("summary_text widget not found for reset.")
+            print("Detail/summary fields reset.")
+        except tk.TclError as e:
+            print(f"TclError resetting text fields (might be closing): {e}")
+        except Exception as e:
+             print(f"ERROR resetting text fields: {e}")
+        print("--- load_events FINISHED ---")
 
     def show_specific_conversation_state(self, event_id: str):
         """Toon een specifieke ConversationState direct via de EventManager."""
@@ -633,58 +751,158 @@ class VoiceUI:
 
     def show_event_details(self, event):
         """Toon de details van een geselecteerd event rechtstreeks via de EventManager."""
-        print("show_event_details aangeroepen")
-        selection = self.event_id_listbox.curselection()
-        if not selection:
+        print("\n--- show_event_details CALLED ---") # Start marker
+
+        # Ensure necessary widgets exist
+        if not hasattr(self, 'event_id_listbox') or not self.event_id_listbox or \
+           not hasattr(self, 'event_details_text') or not self.event_details_text or \
+           not hasattr(self, 'summary_text') or not self.summary_text:
+            print("show_event_details: Widgets not ready. Aborting.")
             return
 
-        display_id = self.event_id_listbox.get(selection[0])
-        event_id = self.event_id_map.get(display_id, display_id)
-        event_type_label = self.event_type_var.get()
-        event_type = next(val for label, val in self.event_type_options if label == event_type_label)
+        selection = self.event_id_listbox.curselection()
+        if not selection:
+            print("No item selected in listbox.")
+            return
 
         try:
-            # Haal het event-object rechtstreeks op via de EventManager
+            selected_index = selection[0]
+            display_id = self.event_id_listbox.get(selected_index)
+            print(f"Selected Display ID: {display_id}")
+
+            # Retrieve full ID, handle potential missing key robustly
+            event_id = self.event_id_map.get(display_id)
+            if not event_id:
+                # Maybe the star needs stripping if it wasn't removed?
+                display_id_stripped = display_id.removesuffix(" ★").strip()
+                event_id = self.event_id_map.get(display_id_stripped)
+                if not event_id:
+                    print(f"ERROR: Full event ID not found in map for display_id: '{display_id}'")
+                    if hasattr(self, 'browse_status_label') and self.browse_status_label:
+                        self.browse_status_label.config(text=f"Error: Cannot find full ID for {display_id}", foreground="red")
+                    return
+                else:
+                    print(f"Found full ID after stripping star: {event_id}")
+            else:
+                print(f"Retrieved Full Event ID: {event_id}")
+
+
+            event_type_label = self.event_type_var.get()
+            event_type_from_dropdown = next((val for label, val in self.event_type_options if label == event_type_label), None) # Use a different variable name
+            print(f"Event type from dropdown: {event_type_from_dropdown}") # See what dropdown thinks type is
+
+            # Get the event object using the full ID
+            print(f"Calling EventManager.get_event_by_id for: {event_id}")
             result = self.event_manager.get_event_by_id(event_id)
+
             if not result:
-                self.error_label.config(text=f"Event '{event_id}' niet gevonden.")
+                print(f"ERROR: EventManager.get_event_by_id returned None for ID: {event_id}")
+                if hasattr(self, 'browse_status_label') and self.browse_status_label:
+                     self.browse_status_label.config(text=f"Error: Event {event_id} not found.", foreground="red")
+                # Clear fields if event not found
+                self.summary_text.config(state=tk.NORMAL)
+                self.summary_text.delete("1.0", tk.END)
+                self.summary_text.config(state=tk.DISABLED)
+                self.event_details_text.config(state=tk.NORMAL)
+                self.event_details_text.delete("1.0", tk.END)
+                self.event_details_text.config(state=tk.DISABLED)
                 return
 
-            event_type, event_obj = result
-            self.original_event_data = event_obj
-            self.current_event_id = event_id
+            # Unpack result
+            actual_event_type, event_obj = result
+            print(f"EventManager returned event type: {actual_event_type}")
+            # print(f"Event Object (type {type(event_obj)}): {event_obj}") # Can be verbose
 
-            # Toon de summary als die er is
-            summary = event_obj.summary if hasattr(event_obj, "summary") else ""
+            # Store original data for undo (if needed)
+            # Be careful with deep copies if objects are large or complex
+            try:
+                self.original_event_data = event_obj.model_dump() if hasattr(event_obj, 'model_dump') else vars(event_obj).copy()
+                print("Stored original event data for undo.")
+            except Exception as copy_e:
+                print(f"Warning: Could not store original event data: {copy_e}")
+                self.original_event_data = None
+
+            self.current_event_id = event_id # Store current ID
+
+            # --- Update Summary Text ---
+            summary = ""
+            if hasattr(event_obj, "summary"):
+                summary = event_obj.summary
+                print(f"Found summary: '{summary}'")
+            else:
+                print("Event object has no 'summary' attribute.")
+
             self.summary_text.config(state=tk.NORMAL)
             self.summary_text.delete("1.0", tk.END)
-            self.summary_text.insert("1.0", summary)
-            self._adjust_summary_height(summary)
-            self.summary_text.config(state=tk.NORMAL)
+            if summary: # Only insert if not empty
+                self.summary_text.insert("1.0", summary)
+            self.summary_text.config(state=tk.NORMAL) # Keep NORMAL for now if needed for _adjust_summary_height
+            # self._adjust_summary_height(summary) # Call adjustment if needed
+            # self.summary_text.config(state=tk.DISABLED) # Disable AFTER potential adjustment
 
-            # Als het een ConversationState is, haal de messages op
-            if event_type == "ConversationState":
-                list_id = event_obj.messages_list_file
+
+            # --- Update Event Details Text ---
+            formatted = ""
+            if actual_event_type == "ConversationState":
+                print("Event is ConversationState. Looking for messages_list_file.")
+                list_id = getattr(event_obj, "messages_list_file", None)
                 if list_id:
-                    messages = self.event_manager.load_list(list_id)
-                    formatted = self._format_messages_for_display(messages)
+                    print(f"Found messages_list_file ID: {list_id}. Loading list...")
+                    try:
+                        messages = self.event_manager.load_list(list_id)
+                        if messages is not None:
+                            print(f"Loaded {len(messages)} messages.")
+                            formatted = self._format_messages_for_display(messages)
+                            # print(f"Formatted Messages:\n{formatted[:500]}...") # Print start of formatted text
+                        else:
+                            print("EventManager.load_list returned None.")
+                            formatted = f"(Could not load messages for list ID: {list_id})"
+                    except Exception as load_e:
+                        print(f"!!! EXCEPTION loading list '{list_id}': {load_e}")
+                        formatted = f"(Error loading messages: {load_e})"
                 else:
-                    formatted = "(Geen messages_list_file gevonden in ConversationState)"
+                    print("No messages_list_file attribute found in ConversationState object.")
+                    formatted = "(No messages_list_file found in ConversationState)"
             else:
-                formatted = json.dumps(event_obj.model_dump(), indent=2, ensure_ascii=False)
+                print(f"Event is '{actual_event_type}'. Formatting as JSON.")
+                try:
+                    # Use model_dump if available (Pydantic), otherwise vars or repr
+                    if hasattr(event_obj, 'model_dump_json'):
+                         formatted = event_obj.model_dump_json(indent=2)
+                    elif hasattr(event_obj, 'model_dump'):
+                         formatted = json.dumps(event_obj.model_dump(), indent=2, ensure_ascii=False)
+                    else:
+                         formatted = json.dumps(vars(event_obj), indent=2, default=str, ensure_ascii=False) # Fallback
+                    # print(f"Formatted JSON:\n{formatted[:500]}...") # Print start of JSON
+                except Exception as json_e:
+                     print(f"!!! EXCEPTION formatting event object as JSON: {json_e}")
+                     formatted = f"(Error formatting event details: {json_e})"
 
+            # Update the UI text widget
+            print("Updating event_details_text widget...")
+            self.event_details_text.config(state=tk.NORMAL)
+            self.event_details_text.delete("1.0", tk.END)
+            self.event_details_text.insert("1.0", formatted)
+            self.event_details_text.config(state=tk.DISABLED) # Disable after inserting
+            self.event_details_text.see("1.0") # Scroll to top
+            print("event_details_text widget updated.")
+
+            # Activate the Set Specific-knop als er een geldige selectie is
+            if hasattr(self, 'set_specific_button'):
+                self.set_specific_button.config(state=tk.NORMAL)
+                print("Set Specific button enabled.")
+
+        except tk.TclError as e:
+             # Can happen if the listbox/window is destroyed during selection
+             print(f"TclError in show_event_details (likely widget destroyed): {e}")
         except Exception as e:
-            formatted = f"Fout bij ophalen details: {e}"
+            print(f"!!! UNEXPECTED EXCEPTION in show_event_details: {e}")
+            import traceback
+            traceback.print_exc() # Print full traceback for unexpected errors
+            if hasattr(self, 'browse_status_label') and self.browse_status_label:
+                self.browse_status_label.config(text=f"Error displaying details: {e}", foreground="red")
 
-        # Update de UI met de opgehaalde details
-        self.event_details_text.config(state=tk.NORMAL)
-        self.event_details_text.delete("1.0", tk.END)
-        self.event_details_text.insert("1.0", formatted)
-        self.event_details_text.config(state=tk.DISABLED)
-        self.event_details_text.see(tk.END)
-
-        # Activeer de Set Specific-knop als er een geldige selectie is
-        self.set_specific_button.config(state=tk.NORMAL)
+        print("--- show_event_details FINISHED ---")
 
 
     def _set_specific_state(self):
