@@ -25,6 +25,12 @@ import pathlib
 # import pydantic
 # from mcp.server.fastmcp import FastMCP
 import aiosqlite
+import ctypes
+try:                                         # Windows 8.1 +  ➜ per-monitor
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:                            # fallback for Windows 7 / 8.0
+    ctypes.windll.user32.SetProcessDPIAware()
+
 from array import array
 from aiohttp import TCPConnector, AsyncResolver
 from asyncio import to_thread
@@ -1559,7 +1565,7 @@ def split_into_sentences(text):
 #         print(f"TTS API error for sentence {order} ({sentence}): {e}")
 
 def trim_and_fade(pcm_bytes: bytes,
-                  *, trim_ms: int = 180, fade_ms: int = 30,
+                  *, trim_ms: int = 195, fade_ms: int = 30,
                   sr: int = 24_000) -> bytes:
     BYTES_PER_SAMPLE = 2
     trim = trim_ms * sr // 1000
@@ -1758,7 +1764,7 @@ async def text_processor():
             
             # Store the original sentence
             numbered_sentences[sentence_order] = sentence.strip() if not HAS_ALNUM.search(sentence) else sentence
-            segment_ready_events[sentence_order] = asyncio.Event()
+            # segment_ready_events[sentence_order] = asyncio.Event()
             
             # Process the sentence immediately - don't batch or delay
             if not HAS_ALNUM.search(sentence):
@@ -1793,10 +1799,8 @@ async def text_processor():
                     if numbered_sentences[sentence_order].startswith("\n")
                     else numbered_sentences[sentence_order]
                 )
-                segment_ready_events[sentence_order] = asyncio.Event()
                 asyncio.create_task(process_empty_sentence(sentence_order))
             else:
-                segment_ready_events[sentence_order] = asyncio.Event()
                 asyncio.create_task(tts_request(clean_sentence, sentence_order))
             sentence_order += 1
         text_buffer = ""

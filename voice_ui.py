@@ -425,15 +425,39 @@ class VoiceUI:
         self.period_options = ["Today", "2 Days", "3 Days", "1 Week", "Pick Date", "Pick Range"]
         self.period_var = tk.StringVar(value=self.period_options[0]) # Default to "Today"
 
-        # --- NOW call load_events, as the variables exist ---
-        # Note: We call load_events *before* creating the window to ensure data is ready
-        # This might feel slightly backwards, but avoids the AttributeError
-        # self.load_events() # Initial load call happens after variables are set
+        ## --- NOW call load_events, as the variables exist ---
+        ## Note: We call load_events *before* creating the window to ensure data is ready
+        ## This might feel slightly backwards, but avoids the AttributeError
+        ## self.load_events() # Initial load call happens after variables are set
 
-        # --- Create the Browse Window ---
+        ## # --- Create the Browse Window ---
+        ## self.browse_window = tk.Toplevel(self.root)
+        ## self.browse_window.title(f"Browse {event_type}")
+        ## self.browse_window.geometry("1100x800+0+0")
+
+        # 1 ─ create the window but keep it hidden
         self.browse_window = tk.Toplevel(self.root)
+        self.browse_window.withdraw()                 # don’t flash an incorrectly-sized window
         self.browse_window.title(f"Browse {event_type}")
-        self.browse_window.geometry("1100x800+0+0")
+        self.browse_window.update_idletasks()         # make geometry information valid
+
+        # 2 ─ measure decorations (border + title-bar)
+        border_px = self.browse_window.winfo_rootx() - self.browse_window.winfo_x()
+        title_px  = self.browse_window.winfo_rooty() - self.browse_window.winfo_y()
+
+        # 3 ─ screen size
+        screen_w  = self.browse_window.winfo_screenwidth()
+        screen_h  = self.browse_window.winfo_screenheight()
+
+        # 4 ─ target client size = 50 % width, 100 % height minus decorations
+        target_w  = screen_w // 2 - border_px * 2
+        target_h  = screen_h - title_px - border_px   # title on top, border at bottom
+
+        # 5 ─ apply geometry and show the window
+        self.browse_window.geometry(f"{target_w}x{target_h}+0+0")
+        self.browse_window.deiconify()
+        self.browse_window.focus_force()
+
 
         # Titel
         title_label = ttk.Label(self.browse_window, text=f"Browse {event_type}", font=self.header_font)
