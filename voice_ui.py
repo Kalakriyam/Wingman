@@ -977,6 +977,7 @@ class VoiceUI:
             if success:
                 if self.browse_status_label:
                     self.browse_status_label.config(text=f"Event '{event_id}' is verwijderd.") 
+                self.current_event_id = None
                 self.load_events()  # Refresh lijst
                 self.event_details_text.config(state=tk.NORMAL)
                 self.event_details_text.delete("1.0", tk.END)
@@ -1285,36 +1286,29 @@ class VoiceUI:
 
     def _save_summary(self):
         """Save the updated summary directly via EventManager."""
-        selection = self.event_id_listbox.curselection()
-        if not selection:
+        if not self.current_event_id:
             messagebox.showwarning("Geen selectie", "Selecteer eerst een event om te bewaren.")
             return
-
-        display_id = self.event_id_listbox.get(selection[0])
-        event_id = self.event_id_map.get(display_id, display_id)
 
         new_summary = self.summary_text.get("1.0", tk.END).strip()
 
         try:
-            # Directe aanroep van de EventManager
             with self.event_manager.lock, connect(self.event_manager.db_path) as conn:
                 cursor = conn.execute(
                     "SELECT content FROM events WHERE event_id = ? AND type = ?",
-                    (event_id, "ConversationState"))
+                    (self.current_event_id, "ConversationState"))
                 row = cursor.fetchone()
                 if not row:
                     messagebox.showerror("Fout", "Event niet gevonden in de database.")
                     return
 
-                # Update de summary in de content        
                 content = orjson.loads(row[0])
                 content['summary'] = new_summary
                 content_json = orjson.dumps(content).decode('utf-8')
 
-                # Sla de gewijzigde content op
                 conn.execute(
                     "UPDATE events SET content = ? WHERE event_id = ? AND type = ?",
-                    (content_json, event_id, "ConversationState"))
+                    (content_json, self.current_event_id, "ConversationState"))
                 conn.commit()
 
             self.browse_status_label.config(text="Summary saved.")
