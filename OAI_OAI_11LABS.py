@@ -39,8 +39,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 from datetime import datetime
-from pydub import AudioSegment
-from pydub.exceptions import CouldntDecodeError
+# from pydub import AudioSegment
+# from pydub.exceptions import CouldntDecodeError
 # from pydub.playback import play
 # from ultimate_playback import play
 from functools import partial
