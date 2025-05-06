@@ -5,3 +5,7 @@ __pycache__/
 # Ignore system files
 .DS_Store
 Thumbs.db
+# Ignore database extra files
+*.db-shm
+*.db-wal
+
