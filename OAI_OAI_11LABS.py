@@ -977,7 +977,7 @@ Laat prioriteit alleen zien als het relevant is.
     # Main transcription + streaming loop
     while True:
         user_input = await whisper_transcriber.transcript_to_tasks_agent()
-        print(f"TASKS_AGENT: Received transcription: '{user_input}'")
+        # print(f"TASKS_AGENT: Received transcription: '{user_input}'")
         if not user_input:
             logging.warning("TASKS_AGENT: Empty transcription received, skipping.")
             continue
