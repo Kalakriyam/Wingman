@@ -875,6 +875,12 @@ class ListItem(BaseModel):
     title: str = Field(..., description="Title of the item (task or shopping good)")
     priority: Optional[PriorityType] = Field(None, description="Priority ('hi', 'med', 'lo') for tasks, None for shopping")
 
+# async def tasks_agent():
+#     while True:
+#         user_input = await whisper_transcriber.transcript_to_tasks_agent()
+#         if user_input:
+#             print(f"User input: {user_input}")
+
 async def tasks_agent():
     """
     Asynchronous coroutine that continuously listens for transcriptions and interacts
@@ -971,7 +977,7 @@ Laat prioriteit alleen zien als het relevant is.
     # Main transcription + streaming loop
     while True:
         user_input = await whisper_transcriber.transcript_to_tasks_agent()
-        logging.info(f"TASKS_AGENT: Received transcription: '{user_input}'")
+        print(f"TASKS_AGENT: Received transcription: '{user_input}'")
         if not user_input:
             logging.warning("TASKS_AGENT: Empty transcription received, skipping.")
             continue
@@ -2878,7 +2884,7 @@ async def main():
     # Start de taak bij het opstarten
     asyncio.create_task(generate_model_audio_segments())
 
-    whisper_transcriber.setup_key_handlers()  # Set up all key handlers once
+    # whisper_transcriber.setup_key_handlers()  
     
     await initialize()
 
@@ -2928,12 +2934,12 @@ if __name__ == "__main__":
             server = asyncio.create_task(start_uvicorn())
             main_task = asyncio.create_task(main())
             playback_task = asyncio.create_task(manage_audio_playback())
-            tasks_agent_task = asyncio.create_task(tasks_agent())
             obsidian_agent_task = asyncio.create_task(obsidian_agent())
             save_idea_event_task = asyncio.create_task(save_idea_event())
             save_journal_event_task = asyncio.create_task(save_journal_event())
             text_consumer_task = asyncio.create_task(text_processor())
             tool_consumer_task = asyncio.create_task(tool_processor())
+            tasks_agent_task = asyncio.create_task(tasks_agent())
 
             async def shutdown_gui_when_done():
                 await shutdown_event.wait()
