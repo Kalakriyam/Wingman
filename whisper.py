@@ -1,5 +1,6 @@
 import asyncio
-import pyaudio
+import sounddevice as sd              # modern, low-latency bindings
+import numpy as np                    # sounddevice delivers NumPy blocks
 import wave
 import keyboard
 import os
@@ -19,10 +20,12 @@ class WhisperTranscriber:
         self.client = AsyncGroq(api_key=self.api_key)
         self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
 
-        self.audio_interface = pyaudio.PyAudio()
+        self.dtype   = 'int16'                # 16-bit is what Whisper expects
         self.channels = 1
-        self.audio_format = pyaudio.paInt16
-        self.rate = 16000
+        self.rate     = 16000
+        sd.default.samplerate = self.rate     # global defaults → less boiler-plate
+        sd.default.channels   = self.channels
+        sd.default.latency    = 'low'         # ask PortAudio for interactive latency
         self.frames = []  # Directe opslag van audioframes
 
         # ✅ Twee events per toets: één voor opname actief, één voor opname klaar
@@ -38,10 +41,10 @@ class WhisperTranscriber:
         # Setup key handlers
         self.setup_key_handlers()
 
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        """Callback om audioframes direct op te slaan."""
-        self.frames.append(in_data)  # Voeg frames direct toe aan de lijst
-        return (None, pyaudio.paContinue)
+    def audio_callback(self, indata, frames, time, status):
+        if status:                        # XRuns/overflows show up here
+            print(f"⚠️  SoundDevice status: {status}", flush=True)
+        self.frames.append(indata.tobytes())
 
     async def save_audio(self):
         """Sla audio op vanuit de frames."""
@@ -53,7 +56,7 @@ class WhisperTranscriber:
         wav_buffer = BytesIO()
         with wave.open(wav_buffer, 'wb') as wav_file:
             wav_file.setnchannels(self.channels)
-            wav_file.setsampwidth(self.audio_interface.get_sample_size(self.audio_format))
+            wav_file.setsampwidth(2)              # 16-bit = 2 bytes per sample
             wav_file.setframerate(self.rate)
             wav_file.writeframes(b''.join(self.frames))
         wav_buffer.seek(0)
@@ -63,17 +66,17 @@ class WhisperTranscriber:
         """Start de audio-opname."""
         print(f"\n>>>>>>  Listening... <<<<<<", end='')
         self.frames = []  # Reset frames
-        stream = self.audio_interface.open(
-            format=self.audio_format,
-            channels=self.channels,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=1024,  # Grotere buffer om callbacks te verminderen
-            stream_callback=self.audio_callback)
-        stream.start_stream()
+        stream = sd.InputStream(
+            channels     = self.channels,
+            samplerate   = self.rate,
+            dtype        = self.dtype,
+            blocksize    = 0,        # PortAudio chooses optimal size (lowest latency)
+            latency      = 'low',
+            callback     = self.audio_callback)
+        stream.start()
         await self.recording_finished_events[key].wait()
         await asyncio.sleep(0.2)  # Wacht even om resterende data te verwerken
-        stream.stop_stream()
+        stream.stop()
         stream.close()
         self.recording_finished_events[key].clear()
 
@@ -168,4 +171,4 @@ class WhisperTranscriber:
                 print("\n⚠️ Geen transcriptie ontvangen.")
 
     def __del__(self):
-        self.audio_interface.terminate()
+        pass  # sounddevice auto-closes streams when they're out of scope
