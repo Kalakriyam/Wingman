@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice UI Emulator - Neumorphic Edge</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-background: #F3F0EC; 
+            --element-background: var(--primary-background); 
+            --text-color: #5C554E;         
+            --icon-color-dark: var(--text-color);
+            --icon-color-medium: #989088;    
+            --icon-color-light: #FFFFFF;
+
+            --primary-button-bg: #E0D5B9;    
+
+            /* Main Extruding Shadows (as before, but we might tweak if needed) */
+            --shadow-offset: 4px; 
+            --shadow-blur: 10px;  
+            --shadow-dark-color: rgba(180, 170, 160, 0.45); 
+            --shadow-light-color: rgba(255, 255, 255, 0.8); 
+
+            --neumorphic-shadow-extrude: 
+                var(--shadow-offset) var(--shadow-offset) var(--shadow-blur) var(--shadow-dark-color),
+                calc(-1 * var(--shadow-offset)) calc(-1 * var(--shadow-offset)) var(--shadow-blur) var(--shadow-light-color);
+
+            /* Pressed/Inset Shadow for :active states and Select */
+            --neumorphic-shadow-inset: 
+                inset calc(var(--shadow-offset) / 1.8) calc(var(--shadow-offset) / 1.8) calc(var(--shadow-blur) / 1.8) var(--shadow-dark-color), /* Deeper inset */
+                inset calc(-1 * var(--shadow-offset) / 1.8) calc(-1 * var(--shadow-offset) / 1.8) calc(var(--shadow-blur) / 1.8) var(--shadow-light-color);
+            
+            /* === NEW: SUBTLE INSET BEVEL FOR EDGE DEFINITION === */
+            --edge-bevel-dark-color: rgba(0, 0, 0, 0.06); /* Very subtle dark for top/left bevel edge */
+            --edge-bevel-light-color: rgba(255, 255, 255, 0.7); /* Very subtle light for bottom/right bevel edge */
+            
+            --neumorphic-edge-bevel:
+                inset 1px 1px 2px var(--edge-bevel-dark-color),   /* Darker line on highlight side */
+                inset -1px -1px 2px var(--edge-bevel-light-color); /* Lighter line on shadow side */
+            /* The above creates a bevel effect on the element's surface */
+
+            /* Text Embossing */
+            --text-emboss-shadow: 
+                0.5px 0.5px 0.5px rgba(0, 0, 0, 0.1), 
+                -0.5px -0.5px 0.5px rgba(255, 255, 255, 0.6);
+
+            --border-radius-rect: 12px;
+            --control-height: 48px; 
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 500; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: var(--primary-background);
+            color: var(--text-color);
+            text-shadow: var(--text-emboss-shadow); 
+        }
+
+        .container {
+            background-color: var(--element-background); 
+            padding: 28px 30px; 
+            border-radius: 18px; 
+            box-shadow: var(--neumorphic-shadow-extrude); /* Main container extrudes, no extra edge bevel here */
+            width: 90%;
+            max-width: 320px; 
+        }
+
+        .title-container { 
+            background-color: var(--element-background);
+            padding: 12px 15px;
+            border-radius: var(--border-radius-rect);
+            /* Apply both the main extrude shadow AND the edge bevel */
+            box-shadow: var(--neumorphic-shadow-extrude), var(--neumorphic-edge-bevel);
+            margin-bottom: 20px; 
+            text-align: center;
+        }
+        
+        .title-container h2 {
+            font-weight: 600; 
+            margin: 0; 
+            font-size: 1.1em; 
+            line-height: 1.2;
+            text-transform: none; 
+            transition: color 0.3s ease-in-out;
+        }
+
+        #statusLabel {
+            padding: 10px 10px; 
+            border-radius: 8px; 
+            text-align: center;
+            font-weight: 500;
+            margin-bottom: 20px; 
+            opacity: 0; 
+            transition: opacity 1.5s ease-in-out, background-color 0.3s, color 0.3s; 
+            font-size: 0.85em; 
+            line-height: 1.3;
+            min-height: 20px;
+        }
+
+        #statusLabel.visible {
+            opacity: 1;
+        }
+        
+        #statusLabel.status-error {
+            color: #b71c1c; 
+            background-color: rgba(224, 213, 185, 0.2); 
+            border: 1px solid rgba(183, 28, 28, 0.2);
+            text-shadow: none; 
+        }
+        #statusLabel.status-success {
+            background-color: rgba(224, 213, 185, 0.1); 
+        }
+
+
+        label {
+            display: block;
+            margin-bottom: 6px; 
+            font-weight: 500; 
+            font-size: 0.9em; 
+            text-transform: none;
+        }
+
+        .select-wrapper {
+            position: relative;
+            width: 100%;
+            margin-bottom: 20px; 
+        }
+
+        .select-wrapper::after { 
+            content: '';
+            position: absolute;
+            top: 50%;
+            right: 18px;
+            transform: translateY(-50%) rotate(45deg);
+            width: 6px; 
+            height: 6px; 
+            border-bottom: 2px solid var(--icon-color-medium); 
+            border-right: 2px solid var(--icon-color-medium);
+            pointer-events: none; 
+        }
+
+        select {
+            width: 100%;
+            height: var(--control-height);
+            padding: 0 40px 0 15px; 
+            border-radius: var(--border-radius-rect);
+            font-family: 'Poppins', sans-serif;
+            font-weight: 500; 
+            font-size: 0.9em; 
+            box-sizing: border-box;
+            transition: box-shadow 0.2s ease-in-out;
+            display: block; 
+            line-height: var(--control-height);
+            
+            background-color: var(--element-background);
+            border: none; 
+            color: var(--text-color); 
+            box-shadow: var(--neumorphic-shadow-inset); /* Inset elements don't get the outer edge bevel */
+            appearance: none; 
+            text-transform: none;
+        }
+        select option {
+             text-shadow: var(--text-emboss-shadow);
+             background-color: var(--primary-background); 
+             color: var(--text-color);
+        }
+
+
+        select:focus {
+            outline: none;
+            box-shadow: var(--neumorphic-shadow-inset), 
+                        0 0 0 2px var(--primary-button-bg); 
+        }
+
+        button {
+            width: 100%;
+            height: var(--control-height);
+            padding: 0 15px; 
+            border-radius: var(--border-radius-rect); 
+            font-family: 'Poppins', sans-serif;
+            font-weight: 600; 
+            font-size: 0.9em; 
+            box-sizing: border-box;
+            transition: box-shadow 0.15s ease-in-out, background-color 0.15s ease-in-out;
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            
+            background-color: var(--primary-button-bg); 
+            color: var(--text-color); 
+            border: none; 
+            /* Apply both the main extrude shadow AND the edge bevel */
+            box-shadow: var(--neumorphic-shadow-extrude), var(--neumorphic-edge-bevel);
+            cursor: pointer;
+            text-transform: none;
+        }
+
+        button:hover {
+            background-color: #E8DDC3; 
+        }
+
+        button:active {
+            /* When pressed, we use a full inset shadow, so the edge bevel is removed */
+            box-shadow: var(--neumorphic-shadow-inset); 
+            background-color: #D8CBB0; 
+        }
+        
+        button:disabled {
+            background-color: #E8E5E2; 
+            color: var(--icon-color-medium); 
+            box-shadow: var(--neumorphic-shadow-inset); 
+            cursor: not-allowed;
+            text-shadow: none; 
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="title-container">
+            <h2 id="mainTitle">Select Voice</h2>
+        </div>
+
+        <div id="statusLabel"></div> 
+
+        <label for="voiceSelect">Available Voices:</label>
+        <div class="select-wrapper">
+            <select id="voiceSelect">
+                <!-- Options will be dynamically populated -->
+            </select>
+        </div>
+
+        <button id="sendVoiceButton" disabled>Send Voice</button>
+    </div>
+
+    <script>
+        // JAVASCRIPT REMAINS THE SAME
+        const API_BASE_URL = "http://127.0.0.1:5001"; 
+        const voiceSelect = document.getElementById('voiceSelect');
+        const sendVoiceButton = document.getElementById('sendVoiceButton');
+        const statusLabel = document.getElementById('statusLabel');
+        const mainTitle = document.getElementById('mainTitle');
+
+        let availableVoicesData = {};
+        let statusTimeoutId = null; 
+
+        function resetMainTitle() {
+            mainTitle.textContent = "Select Voice"; 
+            mainTitle.style.color = "var(--text-color)"; 
+        }
+
+        function showStatus(message, isError = false) {
+            if (statusTimeoutId) {
+                clearTimeout(statusTimeoutId);
+            }
+            statusLabel.textContent = message;
+            statusLabel.className = ''; 
+            statusLabel.classList.add('visible'); 
+            if (isError) {
+                statusLabel.classList.add('status-error');
+            } else {
+                statusLabel.classList.add('status-success'); 
+            }
+            statusTimeoutId = setTimeout(() => {
+                statusLabel.classList.remove('visible'); 
+            }, 5000); 
+        }
+
+        async function fetchVoices() {
+            sendVoiceButton.disabled = true; 
+            voiceSelect.innerHTML = '<option value="">Loading...</option>'; 
+            resetMainTitle(); 
+            try {
+                const response = await fetch(`${API_BASE_URL}/voices`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                availableVoicesData = data.voices; 
+                populateVoiceDropdown(availableVoicesData);
+            } catch (error) {
+                console.error("Error fetching voices:", error);
+                showStatus(`Error fetching voices: ${error.message}`, true);
+                voiceSelect.innerHTML = '<option value="">Could not load voices</option>'; 
+                sendVoiceButton.disabled = true; 
+            }
+        }
+
+        function populateVoiceDropdown(voices) {
+            voiceSelect.innerHTML = ''; 
+            const placeholderOption = document.createElement('option');
+            placeholderOption.value = ""; 
+            placeholderOption.textContent = "Choose a voice..."; 
+            placeholderOption.disabled = true; 
+            placeholderOption.selected = true; 
+            voiceSelect.appendChild(placeholderOption);
+
+            if (Object.keys(voices).length === 0) {
+                sendVoiceButton.disabled = true;
+                return;
+            }
+            for (const voiceName in voices) {
+                const option = document.createElement('option');
+                option.value = voiceName;
+                option.textContent = voiceName;
+                voiceSelect.appendChild(option);
+            }
+            sendVoiceButton.disabled = true; 
+            voiceSelect.addEventListener('change', () => {
+                 sendVoiceButton.disabled = voiceSelect.value === "";
+            });
+        }
+
+        async function sendSelectedVoice() {
+            const selectedVoiceName = voiceSelect.value;
+            if (!selectedVoiceName || selectedVoiceName === "") {
+                showStatus("Please select a voice first.", true); 
+                return;
+            }
+            const selectedVoiceId = availableVoicesData[selectedVoiceName];
+            if (!selectedVoiceId) {
+                showStatus(`Error: Could not find voice_id for ${selectedVoiceName}.`, true); 
+                return;
+            }
+            const payload = {
+                voice_id: selectedVoiceId,      
+                voice_name: selectedVoiceName
+            };
+            sendVoiceButton.disabled = true; 
+            showStatus("Sending...", false); 
+            try {
+                const response = await fetch(`${API_BASE_URL}/update_voice`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const responseData = await response.json(); 
+                if (!response.ok) {
+                    let errorMessage = `HTTP error! status: ${response.status}`;
+                    if (responseData.detail && Array.isArray(responseData.detail) && responseData.detail.length > 0) {
+                        errorMessage = responseData.detail.map(err => `${err.loc.join('.')} - ${err.msg}`).join('; ');
+                    } else if (responseData.message) {
+                        errorMessage = responseData.message;
+                    }
+                    throw new Error(errorMessage);
+                }
+                showStatus(responseData.message || "Voice updated successfully!", false); 
+                mainTitle.textContent = `Active Voice: ${selectedVoiceName}`; 
+                mainTitle.style.color = "var(--text-color)"; 
+            } catch (error) {
+                console.error("Error updating voice:", error);
+                showStatus(`Error updating voice: ${error.message || 'Server unreachable or invalid response'}`, true); 
+                resetMainTitle(); 
+            } finally {
+                // Keep button disabled
+            }
+        }
+        document.addEventListener('DOMContentLoaded', fetchVoices);
+        sendVoiceButton.addEventListener('click', sendSelectedVoice);
+    </script>
+</body>
+</html>

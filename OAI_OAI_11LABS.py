@@ -333,6 +333,14 @@ async def update_voice(request: VoiceUpdateRequest):
     await generate_model_audio_segments()
     return {"message": f"Stem bijgewerkt naar {request.voice_name}"}
 
+@fastapi_app.get("/voices")
+async def get_voices():
+    """
+    Endpoint to fetch the list of available voices.
+    Returns a dictionary mapping voice names to their IDs.
+    """
+    voices = await settings_manager.get_all_voices()
+    return {"voices": voices}
 
 @fastapi_app.post('/reload_default_prompts')
 async def reload_default_prompts(request: ReloadRequest):
@@ -911,7 +919,7 @@ Als een gebruiker vraagt om iets te verwijderen, werk dan volgens deze stappen:
 4) Verwijder het gekozen item
 
 Het is dus essentieel dat je geen exacte tekstvergelijking gebruikt.
-Bijvoorbeeld: als de gebruiker zegt “verwijder het brood van mijn boodschappenlijst”, dan doe je:
+Bijvoorbeeld: als de gebruiker zegt "verwijder het brood van mijn boodschappenlijst", dan doe je:
 1) de boodschappenlijst geheel ophalen > stel dat je ziet dat de lijst "bruin brood" bevat en geen andere items met 'brood'
 2) de vraag was "verwijder het brood van mijn boodschappenlijst"
 3) het item dat het meest op de vraag lijkt is "bruin brood" (aangezien het de enige 'brood' item is)
@@ -2284,11 +2292,6 @@ class CommunicationManager:
             self.voice_name = voice_name
             print(f"Stem bijgewerkt naar: {voice_name}")
 
-    # niet meer actueel, leeggemaakt
-    async def get_voices_dict(self) -> dict[str, str]:
-        # let op! SettingsManager heeft een methode get_all_voices()
-        # die wordt gebruikt in VoiceUI.py
-        return
     
     async def handle_action(self, message: Message) -> str:
         async with self._lock:
@@ -2966,3 +2969,4 @@ if __name__ == "__main__":
             await http_session_shutdown()
             sys.exit(0)
     asyncio.run(run_all())
+
